@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <!-- Outer hex frame in cyan with subtle glow via double-stroke -->
+  <path d="M32 3 L56 17 L56 47 L32 61 L8 47 L8 17 Z"
+        stroke="#00FFFF" stroke-width="1.5" stroke-linejoin="round"
+        fill="rgba(0, 255, 255, 0.04)"/>
+
+  <!-- Sync arc (magenta) - top-right, suggesting rotation -->
+  <path d="M46 20 A18 18 0 0 1 50 32"
+        stroke="#FF00FF" stroke-width="1.75" stroke-linecap="round" fill="none"/>
+  <!-- Arrow tip on the sync arc -->
+  <path d="M50 32 L47 30 M50 32 L52 29"
+        stroke="#FF00FF" stroke-width="1.75" stroke-linecap="round" fill="none"/>
+
+  <!-- Reverse sync arc bottom-left -->
+  <path d="M18 44 A18 18 0 0 1 14 32"
+        stroke="#FF00FF" stroke-width="1.75" stroke-linecap="round" fill="none" opacity="0.55"/>
+  <path d="M14 32 L17 34 M14 32 L12 35"
+        stroke="#FF00FF" stroke-width="1.75" stroke-linecap="round" fill="none" opacity="0.55"/>
+
+  <!-- Terminal prompt ">" -->
+  <path d="M22 24 L32 32 L22 40"
+        stroke="#00FFFF" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <!-- Underscore "_" -->
+  <path d="M34 42 L44 42"
+        stroke="#00FFFF" stroke-width="2.5" stroke-linecap="round" fill="none"/>
+</svg>

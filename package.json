@@ -1,0 +1,49 @@
+{
+  "name": "shellsync",
+  "version": "0.18.2",
+  "description": "ShellSync — A sleek futuristic SSH client with integrated SFTP transfer",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --win",
+    "build:installer": "electron-builder --win nsis",
+    "build:portable": "electron-builder --win portable",
+    "build:both": "electron-builder --win nsis portable"
+  },
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3"
+  },
+  "dependencies": {
+    "ssh2": "^1.15.0",
+    "@xterm/xterm": "^5.5.0",
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/addon-web-links": "^0.11.0",
+    "@xterm/addon-search": "^0.15.0"
+  },
+  "build": {
+    "appId": "com.example.shellsync",
+    "productName": "ShellSync",
+    "files": [
+      "main.js", "preload.js", "renderer/**/*", "build/**/*", "node_modules/**/*", "package.json",
+      "!**/*.md", "!**/{.git,.github,.vscode,test,tests,__tests__,docs,example,examples}/**",
+      "!**/*.map"
+    ],
+    "win": {
+      "target": [{ "target": "nsis", "arch": ["x64"] }],
+      "artifactName": "${productName}-Setup-${version}.${ext}",
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false, "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true, "createStartMenuShortcut": true,
+      "shortcutName": "ShellSync"
+    },
+    "portable": {
+      "artifactName": "${productName}-Portable-${version}.${ext}"
+    }
+  }
+}

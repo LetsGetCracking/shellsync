@@ -1,0 +1,579 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>ShellSync</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- =========== APP LOGIN SCREEN (shown when App Login is enabled) =========== -->
+  <div id="login-screen" class="lock-screen hidden">
+    <div class="lock-inner">
+      <div class="lock-logo" id="login-logo"></div>
+      <h2>Shell<span class="brand-accent">Sync</span></h2>
+      <p class="lock-desc">Enter your password to continue.</p>
+      <input id="login-password" type="password" autocomplete="off" tabindex="-1" placeholder="Password" />
+      <div id="login-error" class="lock-error hidden"></div>
+      <button id="login-btn" class="btn-primary"><span data-icon="key"></span> Unlock</button>
+    </div>
+  </div>
+
+  <!-- Small dialog: create a new folder + assign sessions to it -->
+  <div id="create-folder-dialog" class="dialog hidden">
+    <div class="dialog-inner card" style="min-width:460px;max-width:520px;">
+      <h3><span data-icon="folder-plus"></span> Create Folder</h3>
+      <p class="dialog-desc">Give your folder a name, then check any sessions to move into it.</p>
+      <label>Folder name
+        <input id="cf-name" type="text" placeholder="e.g. Production" />
+      </label>
+      <div id="cf-sessions-wrap" style="margin-top:12px;">
+        <div style="font-size:10px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-2);font-weight:600;margin-bottom:8px;">Sessions to move (optional)</div>
+        <div id="cf-sessions-list" class="cf-sessions-list">
+          <div class="cf-empty">No sessions yet.</div>
+        </div>
+      </div>
+      <div class="dialog-actions">
+        <button id="cf-cancel"><span data-icon="x"></span> Cancel</button>
+        <button id="cf-create" class="btn-primary" disabled><span data-icon="folder-plus"></span> Create Folder</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Small dialog: move session to folder -->
+  <div id="move-folder-dialog" class="dialog hidden">
+    <div class="dialog-inner card" style="min-width:420px;">
+      <h3>Move to Folder</h3>
+      <p class="dialog-desc" id="mf-desc"></p>
+      <label>Folder
+        <div class="folder-field">
+          <select id="mf-select"><option value="">(root)</option></select>
+          <input id="mf-new" type="text" placeholder="Type new folder name and press Enter" class="hidden" />
+        </div>
+      </label>
+      <div class="dialog-actions">
+        <button id="mf-cancel"><span data-icon="x"></span> Cancel</button>
+        <button id="mf-save" class="btn-primary"><span data-icon="folder"></span> Move</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- =========== CUSTOM TITLE BAR =========== -->
+  <div id="titlebar">
+    <div class="tb-drag">
+      <div class="tb-brand">
+        <span class="tb-logo" id="tb-logo"></span>
+        <span class="tb-name">Shell<span class="tb-accent">Sync</span></span>
+      </div>
+    </div>
+    <div class="tb-right">
+      <span class="tb-version">v0.15.3</span>
+      <button class="tb-avatar" title="User"><span data-icon="user"></span></button>
+      <div class="tb-controls">
+        <button class="tb-btn" id="tb-min" title="Minimize"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M0 5h10" stroke="currentColor" stroke-width="1.2"/></svg></button>
+        <button class="tb-btn" id="tb-max" title="Maximize"><svg width="10" height="10" viewBox="0 0 10 10"><rect x="0.5" y="0.5" width="9" height="9" fill="none" stroke="currentColor" stroke-width="1"/></svg></button>
+        <button class="tb-btn tb-close" id="tb-close" title="Close"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M0 0 L10 10 M10 0 L0 10" stroke="currentColor" stroke-width="1.2"/></svg></button>
+      </div>
+    </div>
+  </div>
+
+  <div id="app">
+    <!-- =========== LEFT CARD: SESSIONS =========== -->
+    <aside id="sidebar" class="card">
+      <div class="brand">
+        <div class="brand-logo" id="brand-logo"></div>
+        <div class="brand-text">
+          <div class="brand-name">Shell<span class="brand-accent">Sync</span></div>
+          <div class="brand-tag">SSH · SFTP · SYNC</div>
+        </div>
+      </div>
+
+      <div class="sidebar-header">
+        <h2>Sessions</h2>
+        <div class="sidebar-btns">
+          <button class="icon-btn" id="new-folder-btn" title="Create a new folder" data-icon="folder-plus"></button>
+          <button class="icon-btn" id="import-btn" title="Import sessions" data-icon="download"></button>
+          <button class="icon-btn" id="export-btn" title="Export as JSON" data-icon="upload"></button>
+          <button class="icon-btn primary" id="new-session-btn" title="New session (Ctrl+T)" data-icon="plus"></button>
+        </div>
+      </div>
+
+      <input id="session-filter" placeholder="Search sessions..." />
+      <div class="sort-bar">
+        <label><input type="radio" name="sort" value="name" checked /> Name</label>
+        <label><input type="radio" name="sort" value="recent" /> Recent</label>
+      </div>
+      <div id="session-tree"></div>
+      <div id="sidebar-footer">
+        <button id="open-settings-btn"><span data-icon="settings"></span> Settings</button>
+      </div>
+    </aside>
+
+    <!-- =========== CENTER CARD: TERMINAL =========== -->
+    <main id="main" class="card">
+      <div id="tab-bar"></div>
+
+      <div id="search-bar" class="hidden">
+        <span data-icon="search" style="color:var(--text-2)"></span>
+        <input id="search-input" placeholder="Find in terminal..." />
+        <button id="search-prev" title="Previous (Shift+Enter)" data-icon="chevron-up"></button>
+        <button id="search-next" title="Next (Enter)" data-icon="chevron-down"></button>
+        <label><input type="checkbox" id="search-case" /> Aa</label>
+        <label><input type="checkbox" id="search-regex" /> .*</label>
+        <button id="search-close" title="Close (Esc)" data-icon="x"></button>
+      </div>
+
+      <div id="workspaces"></div>
+
+      <div id="status-bar">
+        <div id="connection-status">
+          <span class="status-dot" id="status-dot"></span>
+          <span id="status-text">No session</span>
+        </div>
+        <div id="transfer-status"></div>
+      </div>
+    </main>
+
+    <!-- =========== RIGHT CARD: FILE PANEL =========== -->
+    <aside id="file-panel" class="card">
+      <div class="fp-tab">
+        <span data-icon="folder"></span>
+        <span class="fp-title" id="fp-title">File Transfer</span>
+        <button class="icon-btn small" id="fp-collapse-btn" title="Hide panel" data-icon="chevron-right"></button>
+      </div>
+
+      <!-- Server stats: Disk / CPU / RAM -->
+      <div id="stats-panel" class="stats-panel hidden">
+        <!-- Disk: full-width row with bar and detail -->
+        <div class="stat-row" data-stat="disk">
+          <div class="stat-ring-wrap">
+            <svg class="stat-ring" viewBox="0 0 40 40" width="32" height="32">
+              <circle cx="20" cy="20" r="16" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="3"/>
+              <circle class="stat-ring-fg" cx="20" cy="20" r="16" fill="none" stroke="url(#statGradCyan)" stroke-width="3"
+                stroke-linecap="round" stroke-dasharray="0 100" transform="rotate(-90 20 20)"/>
+            </svg>
+          </div>
+          <div class="stat-info">
+            <div class="stat-head">
+              <span class="stat-label">Disk</span>
+              <span class="stat-percent">--%</span>
+            </div>
+            <div class="stat-bar"><div class="stat-bar-fill"></div></div>
+            <div class="stat-detail">--</div>
+          </div>
+        </div>
+
+        <!-- CPU + RAM: compact side-by-side, ring + name + percentage only -->
+        <div class="stats-double">
+          <div class="stat-row compact" data-stat="cpu">
+            <div class="stat-ring-wrap">
+              <svg class="stat-ring" viewBox="0 0 40 40" width="32" height="32">
+                <circle cx="20" cy="20" r="16" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="3"/>
+                <circle class="stat-ring-fg" cx="20" cy="20" r="16" fill="none" stroke="url(#statGradMixed)" stroke-width="3"
+                  stroke-linecap="round" stroke-dasharray="0 100" transform="rotate(-90 20 20)"/>
+              </svg>
+            </div>
+            <div class="stat-info">
+              <div class="stat-info-top">
+                <span class="stat-label">CPU</span>
+                <span class="stat-percent">--%</span>
+              </div>
+              <span class="stat-detail">--</span>
+            </div>
+          </div>
+
+          <div class="stat-row compact" data-stat="ram">
+            <div class="stat-ring-wrap">
+              <svg class="stat-ring" viewBox="0 0 40 40" width="32" height="32">
+                <circle cx="20" cy="20" r="16" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="3"/>
+                <circle class="stat-ring-fg" cx="20" cy="20" r="16" fill="none" stroke="url(#statGradMagenta)" stroke-width="3"
+                  stroke-linecap="round" stroke-dasharray="0 100" transform="rotate(-90 20 20)"/>
+              </svg>
+            </div>
+            <div class="stat-info">
+              <div class="stat-info-top">
+                <span class="stat-label">RAM</span>
+                <span class="stat-percent">--%</span>
+              </div>
+              <span class="stat-detail">--</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Shared gradient defs so all three rings share the palette -->
+        <svg width="0" height="0" style="position:absolute">
+          <defs>
+            <linearGradient id="statGradCyan" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0" stop-color="#00FFFF"/>
+              <stop offset="1" stop-color="#4DFFFF"/>
+            </linearGradient>
+            <linearGradient id="statGradMixed" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0" stop-color="#00FFFF"/>
+              <stop offset="1" stop-color="#FF00FF"/>
+            </linearGradient>
+            <linearGradient id="statGradMagenta" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0" stop-color="#FF00FF"/>
+              <stop offset="1" stop-color="#FF66FF"/>
+            </linearGradient>
+          </defs>
+        </svg>
+      </div>
+
+      <div id="file-panel-body">
+        <div class="fp-empty">Connect to a session to browse files.</div>
+      </div>
+    </aside>
+
+    <button id="fp-expand-btn" class="icon-btn card hidden" title="Show file panel" data-icon="chevron-left"></button>
+  </div>
+
+  <div id="context-menu" class="context-menu card hidden"></div>
+
+  <!-- =========== DIALOGS =========== -->
+  <div id="session-dialog" class="dialog hidden">
+    <div class="dialog-inner card">
+      <h3 id="session-dialog-title">New SSH or RDP Session</h3>
+      <div class="session-type-toggle">
+        <button type="button" id="s-type-ssh" class="type-btn active">SSH</button>
+        <button type="button" id="s-type-rdp" class="type-btn">RDP</button>
+      </div>
+      <label>Name <input id="s-name" placeholder="my server" /></label>
+      <label>Folder
+        <div class="folder-field">
+          <select id="s-folder"><option value="">(root)</option></select>
+          <input id="s-folder-new" type="text" placeholder="Type new folder name and press Enter" class="hidden" />
+        </div>
+      </label>
+      <label>Host <input id="s-host" placeholder="192.168.1.10" /></label>
+      <label>Port <input id="s-port" type="number" value="22" /></label>
+      <label>Username <input id="s-user" placeholder="root" /></label>
+
+      <div id="s-ssh-fields">
+        <label>Password
+          <div class="password-field">
+            <input id="s-pass" type="password" />
+            <button type="button" id="s-pass-clear" class="hidden" title="Remove saved password">Clear saved</button>
+          </div>
+        </label>
+        <label>Private key path (optional) <input id="s-key" placeholder="C:\Users\me\.ssh\id_rsa" /></label>
+        <div class="agent-box">
+          <label class="checkbox-row">
+            <input type="checkbox" id="s-use-agent" />
+            <span><strong>Use SSH agent</strong> (Pageant or Windows OpenSSH) — ignores password &amp; key file above</span>
+          </label>
+        </div>
+      </div>
+
+      <div id="s-rdp-fields" class="hidden">
+        <label>Domain (optional) <input id="s-rdp-domain" placeholder="CORP" /></label>
+        <label>Password
+          <div class="password-field">
+            <input id="s-rdp-pass" type="password" placeholder="Save to Windows Credential Manager" />
+            <button type="button" id="s-rdp-pass-clear" class="hidden" title="Remove saved credentials">Clear saved</button>
+          </div>
+        </label>
+        <p class="field-help">Stored in Windows Credential Manager — not in ShellSync.</p>
+
+        <label>Display mode
+          <select id="s-rdp-display-mode">
+            <option value="fullscreen">Full screen</option>
+            <option value="windowed">Windowed</option>
+            <option value="custom">Custom size</option>
+          </select>
+        </label>
+        <div id="s-rdp-custom-size" class="hidden">
+          <label>Width <input id="s-rdp-width" type="number" value="1920" /></label>
+          <label>Height <input id="s-rdp-height" type="number" value="1080" /></label>
+        </div>
+
+        <label>Color depth
+          <select id="s-rdp-color-depth">
+            <option value="32">32-bit</option>
+            <option value="24">24-bit</option>
+            <option value="16">16-bit</option>
+          </select>
+        </label>
+
+        <div class="agent-box">
+          <label class="checkbox-row">
+            <input type="checkbox" id="s-rdp-multimon" />
+            <span>Use all monitors</span>
+          </label>
+        </div>
+
+        <label>RD Gateway (optional) <input id="s-rdp-gateway" placeholder="rdg.corp.local" /></label>
+
+        <div class="agent-box">
+          <label class="checkbox-row">
+            <input type="checkbox" id="s-rdp-admin" />
+            <span>Connect to admin session <code>/admin</code></span>
+          </label>
+          <label class="checkbox-row">
+            <input type="checkbox" id="s-rdp-restricted-admin" />
+            <span>Restricted Admin mode <code>/restrictedAdmin</code> — creds not cached on target</span>
+          </label>
+        </div>
+
+        <div class="rdp-redirection-title">Redirection</div>
+        <div class="agent-box">
+          <label class="checkbox-row">
+            <input type="checkbox" id="s-rdp-clip" checked />
+            <span>Clipboard</span>
+          </label>
+          <label class="checkbox-row">
+            <input type="checkbox" id="s-rdp-drives" />
+            <span>Drives</span>
+          </label>
+          <label class="checkbox-row">
+            <input type="checkbox" id="s-rdp-printers" />
+            <span>Printers</span>
+          </label>
+        </div>
+        <label>Audio
+          <select id="s-rdp-audio">
+            <option value="local">Play on this computer</option>
+            <option value="remote">Play on remote</option>
+            <option value="none">Do not play</option>
+          </select>
+        </label>
+      </div>
+
+      <label>Tags (comma-separated) <input id="s-tags" placeholder="prod, web" /></label>
+      <div class="dialog-actions">
+        <button id="s-cancel"><span data-icon="x"></span> Cancel</button>
+        <button id="s-save" class="btn-primary"><span data-icon="zap"></span> Save &amp; Connect</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="import-dialog" class="dialog hidden">
+    <div class="dialog-inner card">
+      <h3>Import Sessions</h3>
+      <p class="dialog-desc">Choose a source to import from:</p>
+      <div class="dialog-actions" style="justify-content:flex-start;flex-wrap:wrap;border-top:none;padding-top:0;">
+        <button id="imp-ssh-config" class="btn-primary"><span data-icon="key"></span> From ~/.ssh/config</button>
+        <button id="imp-json" class="btn-primary"><span data-icon="file"></span> From JSON file</button>
+        <button id="imp-cancel" style="margin-left:auto;"><span data-icon="x"></span> Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="settings-dialog" class="dialog hidden">
+    <div class="dialog-inner card">
+      <h3>Settings</h3>
+      <h4>Typography</h4>
+      <label>Font family
+        <select id="opt-font-family">
+          <option>JetBrains Mono</option>
+          <option>Cascadia Mono</option>
+          <option>Cascadia Code</option>
+          <option>Fira Code</option>
+          <option>Consolas</option>
+          <option>Courier New</option>
+          <option>Menlo</option>
+          <option>monospace</option>
+        </select>
+      </label>
+      <label>Font size <input id="opt-font-size" type="number" min="8" max="48" value="14" /></label>
+      <label>Line height <input id="opt-line-height" type="number" step="0.05" min="1" max="2" value="1.3" /></label>
+      <label>Font weight
+        <select id="opt-font-weight">
+          <option>normal</option><option>bold</option>
+          <option>100</option><option>300</option><option>400</option>
+          <option>500</option><option>600</option><option>700</option>
+        </select>
+      </label>
+
+      <h4>Behavior</h4>
+      <label><input type="checkbox" id="opt-copy-on-select" /> Copy on select</label>
+      <label><input type="checkbox" id="opt-paste-on-right-click" /> Paste on right-click (terminal)</label>
+
+      <h4>Terminal Colors</h4>
+      <p class="section-hint">These settings only change the SSH terminal window. The rest of the app UI stays on its default theme.</p>
+      <div class="color-grid">
+        <label>Background <input id="c-background" type="color" value="#0A0E17" /></label>
+        <label>Foreground <input id="c-foreground" type="color" value="#E8ECF1" /></label>
+        <label>Cursor     <input id="c-cursor"     type="color" value="#00FFFF" /></label>
+        <label>Selection  <input id="c-selection"  type="color" value="#FF00FF" /></label>
+        <label>Black   <input id="c-black"   type="color" value="#0A0E17" /></label>
+        <label>Red     <input id="c-red"     type="color" value="#FF3366" /></label>
+        <label>Green   <input id="c-green"   type="color" value="#00FF9F" /></label>
+        <label>Yellow  <input id="c-yellow"  type="color" value="#FFD700" /></label>
+        <label>Blue    <input id="c-blue"    type="color" value="#00B4FF" /></label>
+        <label>Magenta <input id="c-magenta" type="color" value="#FF00FF" /></label>
+        <label>Cyan    <input id="c-cyan"    type="color" value="#00FFFF" /></label>
+        <label>White   <input id="c-white"   type="color" value="#E8ECF1" /></label>
+      </div>
+
+      <h4>Presets</h4>
+      <div class="presets">
+        <button data-preset="cybercore">Cybercore (default)</button>
+        <button data-preset="synthwave">Synthwave</button>
+        <button data-preset="matrix">Matrix</button>
+        <button data-preset="dracula">Dracula</button>
+        <button data-preset="solarized-dark">Solarized Dark</button>
+        <button data-preset="dark">VS Code Dark</button>
+        <button data-preset="windows-light">Windows Light</button>
+      </div>
+      <div id="custom-presets" class="presets custom-presets"></div>
+      <button id="save-preset-btn" class="save-preset-btn" type="button">+ Save current colors as preset</button>
+
+      <h4>App Login <span style="color:var(--text-3);font-weight:400;text-transform:none;letter-spacing:0.5px;font-size:11px;margin-left:6px;">(optional launch password)</span></h4>
+      <div id="al-status-row" class="mp-row">
+        <span class="mp-status-icon" data-icon="key"></span>
+        <span class="mp-status-text">Loading...</span>
+      </div>
+      <div id="al-enable-panel" class="mp-panel hidden">
+        <p class="dialog-desc" style="margin: 6px 0 12px;">
+          When enabled, ShellSync asks for this password every time it starts.
+          It's a simple launch gate — it does not encrypt or re-wrap your saved
+          SSH passwords in any way; those stay protected by Windows DPAPI exactly
+          as they are now, whether this is on or off.
+        </p>
+        <label>New password
+          <input id="al-new" type="password" autocomplete="new-password" />
+        </label>
+        <label>Confirm
+          <input id="al-new-confirm" type="password" autocomplete="new-password" />
+        </label>
+        <div class="mp-actions">
+          <button id="al-enable-btn" class="btn-primary" disabled><span data-icon="key"></span> Enable</button>
+        </div>
+      </div>
+      <div id="al-manage-panel" class="mp-panel hidden">
+        <p class="dialog-desc" style="margin: 6px 0 12px;">
+          App Login is on. ShellSync will ask for your password next time it starts.
+        </p>
+        <div class="mp-actions">
+          <button id="al-disable-btn" class="danger-outline"><span data-icon="x"></span> Disable...</button>
+        </div>
+      </div>
+
+      <h4>Known Hosts <span style="color:var(--text-3);font-weight:400;text-transform:none;letter-spacing:0.5px;font-size:11px;margin-left:6px;">(trusted host keys)</span></h4>
+      <div class="kh-toolbar">
+        <button id="kh-import-btn"><span data-icon="download"></span> Import from ~/.ssh/known_hosts</button>
+        <button id="kh-remove-all" class="danger-outline"><span data-icon="trash"></span> Remove all</button>
+      </div>
+      <div id="kh-list" class="kh-list">
+        <div class="kh-empty">No trusted hosts yet.</div>
+      </div>
+
+      <h4>Keyboard Shortcuts</h4>
+      <ul class="shortcuts">
+        <li><kbd>Ctrl</kbd> + <kbd>T</kbd> — New session</li>
+        <li><kbd>Ctrl</kbd> + <kbd>W</kbd> — Close current tab</li>
+        <li><kbd>Ctrl</kbd> + <kbd>Tab</kbd> — Next tab</li>
+        <li><kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>Tab</kbd> — Previous tab</li>
+        <li><kbd>Ctrl</kbd> + <kbd>D</kbd> — Duplicate tab</li>
+        <li><kbd>Ctrl</kbd> + <kbd>F</kbd> — Find in terminal</li>
+        <li><kbd>Ctrl</kbd> + <kbd>B</kbd> — Toggle file panel</li>
+        <li><kbd>Ctrl</kbd> + <kbd>+</kbd> / <kbd>−</kbd> — Global font size</li>
+        <li><kbd>Ctrl</kbd> + scroll — Zoom active terminal only</li>
+      </ul>
+
+      <div class="dialog-actions">
+        <button id="settings-close"><span data-icon="x"></span> Close</button>
+        <button id="settings-apply" class="btn-primary"><span data-icon="zap"></span> Apply</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- =========== HOST KEY VERIFICATION DIALOGS =========== -->
+  <!-- TOFU: first time seeing this host -->
+  <div id="tofu-dialog" class="dialog hidden">
+    <div class="dialog-inner card">
+      <h3><span data-icon="key"></span> Verify Host Identity</h3>
+      <p class="dialog-desc">
+        The authenticity of host <code id="tofu-host"></code> can't be established.
+      </p>
+      <div class="fp-box">
+        <div class="fp-row"><span class="fp-label">Type</span><span class="fp-value" id="tofu-keytype"></span></div>
+        <div class="fp-row"><span class="fp-label">Fingerprint</span><span class="fp-value mono" id="tofu-fp"></span></div>
+      </div>
+      <p class="dialog-desc" style="margin-top: 12px; font-size: 12px;">
+        Trust this key only if you've verified it out-of-band with the server administrator.
+        Once trusted, ShellSync will silently accept it on future connections.
+      </p>
+      <div class="dialog-actions">
+        <button id="tofu-cancel"><span data-icon="x"></span> Cancel</button>
+        <button id="tofu-trust-once"><span data-icon="play"></span> Trust Once</button>
+        <button id="tofu-trust" class="btn-primary"><span data-icon="key"></span> Trust &amp; Connect</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MISMATCH: host is known but key changed -->
+  <div id="mismatch-dialog" class="dialog hidden">
+    <div class="dialog-inner card mismatch-card">
+      <h3 class="mismatch-title"><span data-icon="eye"></span> HOST KEY CHANGED</h3>
+      <div class="mismatch-warn">
+        ⚠ <strong>Someone could be impersonating this server, or its key was rotated.</strong>
+        Do not proceed unless you know the legitimate reason for this change (server rebuild, key rotation, etc).
+      </div>
+      <p class="dialog-desc">Host <code id="mm-host"></code></p>
+      <div class="fp-box">
+        <div class="fp-row"><span class="fp-label old">Previously trusted</span><span class="fp-value mono" id="mm-old-fp"></span></div>
+        <div class="fp-row"><span class="fp-label old">Trusted since</span><span class="fp-value" id="mm-old-date"></span></div>
+        <div class="fp-row"><span class="fp-label new">Presented now</span><span class="fp-value mono" id="mm-new-fp"></span></div>
+        <div class="fp-row"><span class="fp-label new">Type</span><span class="fp-value" id="mm-new-type"></span></div>
+      </div>
+      <label style="margin-top: 12px;">
+        Type <code>yes</code> to acknowledge the risk and replace the trusted key:
+        <input id="mm-confirm" placeholder="type: yes" autocomplete="off" />
+      </label>
+      <div class="dialog-actions">
+        <button id="mm-cancel" class="btn-primary"><span data-icon="x"></span> Cancel (Recommended)</button>
+        <button id="mm-override" disabled><span data-icon="eye"></span> Replace &amp; Connect</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- =========== MIGRATION DIALOG (v0.9 upgrade) =========== -->
+  <div id="migration-dialog" class="dialog hidden">
+    <div class="dialog-inner card">
+      <h3>Secure Your Saved Passwords</h3>
+      <p class="dialog-desc" style="line-height: 1.55;">
+        ShellSync <strong>v0.9</strong> can now encrypt your saved SSH passwords using
+        <strong>Windows DPAPI</strong>, meaning they can only be decrypted by <em>your</em>
+        Windows user account on <em>this</em> machine.
+      </p>
+      <div class="mig-info-box">
+        <div class="mig-info-row">
+          <span data-icon="eye"></span>
+          <span>Currently, <strong id="mig-plain-count">0</strong> passwords are stored as
+          plain text in <code>sessions.json</code>.</span>
+        </div>
+        <div class="mig-info-row">
+          <span data-icon="key"></span>
+          <span>After encryption: even someone reading the file directly cannot recover them.</span>
+        </div>
+        <div class="mig-info-row">
+          <span data-icon="download"></span>
+          <span>A backup of the old file is saved as
+          <code>sessions.pre-upgrade-backup.json</code> — you can delete it after verifying.</span>
+        </div>
+      </div>
+      <div id="mig-warn" class="mig-warn hidden">
+        ⚠ OS encryption (DPAPI) is not available on this system. Migration is disabled.
+      </div>
+      <div class="dialog-actions">
+        <button id="mig-later"><span data-icon="x"></span> Remind Me Later</button>
+        <button id="mig-upgrade" class="btn-primary"><span data-icon="key"></span> Encrypt Now</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="../node_modules/@xterm/xterm/lib/xterm.js"></script>
+  <script src="../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
+  <script src="../node_modules/@xterm/addon-web-links/lib/addon-web-links.js"></script>
+  <script src="../node_modules/@xterm/addon-search/lib/addon-search.js"></script>
+  <script src="icons.js"></script>
+  <script src="dialogs.js"></script>
+  <script src="transferDialog.js"></script>
+  <script src="fileBrowser.js"></script>
+  <script src="renderer.js"></script>
+</body>
+</html>

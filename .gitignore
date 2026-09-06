@@ -1,0 +1,53 @@
+# --- Node/npm ---
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# --- electron-builder output ---
+dist/
+build/output/
+release/
+out/
+
+# --- IDE / editor cruft ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# --- Environment / secrets ---
+# Never commit anything containing credentials, tokens, or signing certs
+.env
+.env.*
+*.pfx
+*.p12
+*.pem
+*.key
+!*.public.pem  # public keys are fine
+
+# --- Test / coverage output ---
+coverage/
+.nyc_output/
+*.lcov
+
+# --- ShellSync-specific ---
+# Old versioned working folders that were used during iteration
+shellsync-v*/
+*.zip
+
+# Uploaded settings / session files that might have real data
+sessions.json
+settings.json
+known_hosts.json
+rdp-log.jsonl
+
+# --- Misc ---
+*.log
+.cache/
+tmp/
+temp/
