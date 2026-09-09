@@ -1,13 +1,13 @@
 # ShellSync
 
-A daily-driver SSH and RDP client for Windows, built around ergonomics and honest defaults.
+A daily-driver SSH, SFTP and RDP client for Windows, built around ergonomics and honest defaults.
 
 <!-- TODO: Replace with a real screenshot once available -->
 ![ShellSync main window](docs/screenshot-main.png)
 
 ## What it is
 
-ShellSync is a personal SSH/RDP client I built because I wanted something that felt like SolarPuTTY (which I like) but that I actually maintain and can shape to my own workflow. It's designed for managing home lab and work Linux servers, plus Windows machines via RDP, in one window.
+ShellSync is a personal SSH, SFTP, and RDP client I built because I wanted something that felt like SolarPuTTY (which I like) but that I actually maintain and can shape to my own workflow. It's designed for managing home lab and work Linux servers, plus Windows machines via RDP, in one window.
 
 **Highlights:**
 
