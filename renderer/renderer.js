@@ -219,10 +219,21 @@ try {
       check();
     });
     console.log('[ShellSync] App Login passed, continuing init');
+    // v0.19.0: arm the idle-inactivity auto-lock. It only activates if App
+    // Login is enabled — otherwise there's nothing to lock back to.
+    enableAutoLockIfNeeded();
   }
 
   console.log('[ShellSync] Binding UI...');
   bindDiskWidget();
+  // v0.19.0: populate the title-bar version from the actual runtime,
+  // not a hardcoded string. Falls back gracefully if the IPC fails.
+  try {
+    const v = await window.api.getAppVersion();
+    if (v) document.getElementById('tb-version').textContent = 'v' + v;
+  } catch (err) {
+    console.warn('[ShellSync] getAppVersion failed:', err);
+  }
   const stored = await window.api.getSettings();
   if (stored) {
     // appLogin is main-owned state, not a renderer preference. Keeping it in
@@ -2497,3 +2508,45 @@ window.addEventListener('resize', () => {
     window.api.sshResize(t.sessionId, t.term.cols, t.term.rows);
   }
 });
+
+// --- Auto-lock after inactivity (v0.19.0) ------------------------------
+// When App Login is enabled, re-shows the lock screen after N minutes of no
+// user activity. SSH sessions themselves keep running in the background —
+// only the UI is gated. Unlocking picks up right where you left off.
+//
+// "Activity" = mouse move, mouse click, key press, or terminal I/O. Terminal
+// output from a remote server does NOT count (we don't want a chatty log
+// stream from a server to prevent auto-lock forever).
+
+const AUTO_LOCK_MINUTES = 15;   // change here if you want a different default
+const AUTO_LOCK_MS = AUTO_LOCK_MINUTES * 60 * 1000;
+let autoLockTimer = null;
+let autoLockEnabled = false;    // set true after successful login IF App Login is enabled
+
+function armAutoLock() {
+  if (!autoLockEnabled) return;
+  if (autoLockTimer) clearTimeout(autoLockTimer);
+  autoLockTimer = setTimeout(() => {
+    console.log('[ShellSync] Auto-lock triggered after', AUTO_LOCK_MINUTES, 'minutes idle');
+    showLoginScreen();
+  }, AUTO_LOCK_MS);
+}
+
+function bindAutoLockActivity() {
+  // Any of these events counts as "user is still here"
+  ['mousemove', 'mousedown', 'keydown', 'wheel', 'touchstart'].forEach(ev => {
+    window.addEventListener(ev, armAutoLock, { passive: true, capture: true });
+  });
+}
+
+// Called from the login screen once the App Login password is verified —
+// if App Login is enabled, arm the auto-lock timer from that moment on.
+async function enableAutoLockIfNeeded() {
+  const s = await window.api.loginStatus();
+  if (s && s.enabled) {
+    autoLockEnabled = true;
+    bindAutoLockActivity();
+    armAutoLock();
+    console.log('[ShellSync] Auto-lock armed:', AUTO_LOCK_MINUTES, 'minutes');
+  }
+}

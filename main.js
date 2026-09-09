@@ -8,6 +8,13 @@ const { spawn } = require('child_process');
 
 app.setName('ShellSync');
 
+// v0.19.0: version comes from package.json via app.getVersion() so the
+// UI can never show a stale hardcoded string. Prior to this the title
+// bar was hardcoded to "v0.15.3" and had to be manually updated per
+// release — which of course wasn't happening, causing months of user
+// confusion about which version was actually installed.
+ipcMain.handle('app:get-version', () => app.getVersion());
+
 const sessions = new Map(); // sessionId -> { client, stream, sftp }
 
 // --- Persistent storage --------------------------------------------------
@@ -16,6 +23,9 @@ const settingsFile = () => path.join(userDataPath(), 'settings.json');
 const sessionsFile = () => path.join(userDataPath(), 'sessions.json');
 const sessionsBackup = () => path.join(userDataPath(), 'sessions.pre-upgrade-backup.json');
 const rdpLogFile = () => path.join(userDataPath(), 'rdp-log.jsonl');
+// v0.19.0: audit log for SSH connections. Same format as the RDP log,
+// separate file so admins doing "who connected to what" queries can distinguish.
+const sshLogFile = () => path.join(userDataPath(), 'ssh-log.jsonl');
 
 // Async events (SSH data, close, SFTP progress) can fire after the window
 // has already been destroyed during app shutdown — the network teardown
@@ -111,10 +121,49 @@ ipcMain.handle('login:disable', (_e, { password }) => {
   return { ok: true };
 });
 
-ipcMain.handle('login:verify', (_e, { password }) => {
+// --- App Login rate limiting (v0.19.0) ---------------------------------
+// Track failed login attempts and impose escalating delays. This prevents
+// brute-force guessing of the App Login password if someone gets their hands
+// on your unlocked machine. Delays reset after a successful login or after
+// the process restarts (in-memory only — deliberately not persisted, so a
+// legitimate user who forgets their password isn't locked out across
+// restarts).
+let loginFailedAttempts = 0;
+let loginNextAttemptAllowed = 0;
+
+function loginBackoffMs(attemptCount) {
+  // 0-2 attempts: no delay. 3+: 2^(n-2) seconds, capped at 30s.
+  // So: 3rd fail = 2s, 4th = 4s, 5th = 8s, 6th = 16s, 7th+ = 30s.
+  if (attemptCount <= 2) return 0;
+  return Math.min(30000, Math.pow(2, attemptCount - 2) * 1000);
+}
+
+ipcMain.handle('login:verify', async (_e, { password }) => {
   const cfg = loginConfig();
   if (!cfg || !cfg.enabled) return { ok: true }; // nothing to verify — not enabled
-  if (!loginPasswordMatches(password, cfg)) return { ok: false, error: 'Incorrect password.' };
+
+  // Are we in a backoff window from previous failures?
+  const now = Date.now();
+  if (now < loginNextAttemptAllowed) {
+    const waitMs = loginNextAttemptAllowed - now;
+    return { ok: false, error: `Too many failed attempts. Wait ${Math.ceil(waitMs / 1000)}s.` };
+  }
+
+  if (!loginPasswordMatches(password, cfg)) {
+    loginFailedAttempts++;
+    const backoff = loginBackoffMs(loginFailedAttempts);
+    if (backoff > 0) loginNextAttemptAllowed = Date.now() + backoff;
+    return {
+      ok: false,
+      error: backoff > 0
+        ? `Incorrect password. Wait ${Math.ceil(backoff / 1000)}s before trying again.`
+        : 'Incorrect password.',
+    };
+  }
+
+  // Success — reset the counter
+  loginFailedAttempts = 0;
+  loginNextAttemptAllowed = 0;
   return { ok: true };
 });
 
@@ -593,6 +642,19 @@ ipcMain.handle('ssh:connect', (event, { sessionId, savedSessionId, host, port, u
     };
 
     client.on('ready', () => {
+      // v0.19.0: audit log — record every successful SSH connection.
+      // Best-effort; a failed log write never blocks a connect.
+      try {
+        const entry = {
+          timestamp: new Date().toISOString(),
+          sessionId,
+          host,
+          port: port || 22,
+          username: username || '',
+          auth: useAgent ? 'agent' : (privateKey ? 'key' : (password ? 'password' : 'none')),
+        };
+        fs.appendFileSync(sshLogFile(), JSON.stringify(entry) + '\n');
+      } catch { /* audit log is best-effort */ }
       client.shell({ term: 'xterm-256color', cols: cols || 80, rows: rows || 24 }, (err, stream) => {
         if (err) { resolve({ ok: false, error: err.message }); return; }
         const entry = { client, stream, sftp: null };

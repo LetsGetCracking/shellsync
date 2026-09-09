@@ -71,6 +71,11 @@ contextBridge.exposeInMainWorld('api', {
   importSshConfig: () => ipcRenderer.invoke('sshconfig:import'),
   exportSessions: (sessions) => ipcRenderer.invoke('sessions:export', sessions),
   importSessions: () => ipcRenderer.invoke('sessions:import'),
+
+  // v0.19.0: expose the runtime app version so the UI can display it
+  // instead of a hardcoded string that goes stale. Reads from
+  // Electron's app.getVersion() which reads package.json at startup.
+  getAppVersion: () => ipcRenderer.invoke('app:get-version'),
 });
 
 function sub(channel, cb) {

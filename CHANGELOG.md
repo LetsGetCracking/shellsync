@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Security-relevant changes are marked with **[SECURITY]**.
 
+## [0.19.0] — 2026-09
+
+### Fixed
+
+- **Title bar version was hardcoded to `v0.15.3` and never updated.** The version number in the top-right corner of the app was a static string in `index.html` that hadn't been touched since v0.15.3 shipped — meaning every version from v0.16.0 through v0.18.2 was running correctly, but the UI was lying about which one you had installed. Caused several hours of confused debugging when the installer appeared to "not upgrade" the app. Now reads from Electron's `app.getVersion()` at runtime, so the number in the title bar always matches `package.json` and can never go stale again.
+
+### Added
+
+- **[SECURITY] Auto-lock after inactivity.** When App Login is enabled, ShellSync now re-shows the lock screen after 15 minutes of no user activity (mouse, keyboard, or terminal input). SSH sessions themselves keep running in the background — only the UI is gated. Unlocking resumes exactly where you left off. Fixes a real weakness where App Login was effectively no protection once unlocked for a session that ran all day.
+
+- **[SECURITY] App Login rate-limiting.** After the 3rd failed password attempt, ShellSync imposes an escalating delay: 2s, then 4s, 8s, 16s, capped at 30s. Prevents brute-force guessing if someone gets their hands on your unlocked machine. Delays reset on successful login and don't persist across restarts (so a legitimate user who forgets their password isn't locked out permanently).
+
+- **SSH audit log.** Successful SSH connections are now recorded in `%APPDATA%\ShellSync\ssh-log.jsonl` — one JSON line per connect with timestamp, host, port, username, and which auth method was used. Complements the existing RDP log. Useful for the "who connected to what when" question.
+
 ## [0.18.2] — 2026-09
 
 ### Fixed
