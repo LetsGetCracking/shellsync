@@ -9,6 +9,9 @@ const DEFAULT_SETTINGS = {
   fontFamily: 'JetBrains Mono', fontSize: 14, lineHeight: 1.3, fontWeight: 'normal',
   copyOnSelect: true, pasteOnRightClick: true,
   filePanelVisible: true,
+  // v0.19.1: minutes of inactivity before App Login re-locks. 0 = never lock.
+  // Only takes effect when App Login is enabled. Default 15 minutes.
+  autoLockMinutes: 15,
   theme: {
     background: '#0A0E17', foreground: '#E8ECF1',
     cursor: '#00FFFF', selectionBackground: '#4B0068',
@@ -1431,6 +1434,9 @@ function loadSettingsIntoUI() {
   refreshCustomSelect('opt-font-weight');
   document.getElementById('opt-copy-on-select').checked = !!settings.copyOnSelect;
   document.getElementById('opt-paste-on-right-click').checked = !!settings.pasteOnRightClick;
+  // v0.19.1: auto-lock timeout
+  const autoLockField = document.getElementById('opt-autolock');
+  if (autoLockField) autoLockField.value = Number(settings.autoLockMinutes) || 0;
   const t = settings.theme;
   document.getElementById('c-background').value = t.background;
   document.getElementById('c-foreground').value = t.foreground;
@@ -1446,6 +1452,17 @@ function applyUIToSettings() {
   settings.fontWeight = document.getElementById('opt-font-weight').value;
   settings.copyOnSelect = document.getElementById('opt-copy-on-select').checked;
   settings.pasteOnRightClick = document.getElementById('opt-paste-on-right-click').checked;
+  // v0.19.1: auto-lock timeout. Clamp to a sane range (0 to 999 minutes ≈ 16 hours).
+  // Value 0 = never lock. Anything negative or non-numeric silently becomes 0.
+  const autoLockField = document.getElementById('opt-autolock');
+  if (autoLockField) {
+    let mins = parseInt(autoLockField.value, 10);
+    if (!isFinite(mins) || mins < 0) mins = 0;
+    if (mins > 999) mins = 999;
+    settings.autoLockMinutes = mins;
+    // Re-arm the timer immediately so the new value takes effect without a restart
+    refreshAutoLockAfterSettingChange();
+  }
   const t = settings.theme;
   t.background = document.getElementById('c-background').value;
   t.foreground = document.getElementById('c-foreground').value;
@@ -1686,13 +1703,35 @@ function attachTerminalUX(entry, container) {
     entry.localFontSize = Math.max(8, Math.min(48,
       entry.localFontSize + (e.deltaY < 0 ? 1 : -1)));
     entry.term.options.fontSize = entry.localFontSize;
-    // Defer to next frame: xterm needs a beat to remeasure character cells
-    // at the new font size before fit() can compute correct cols/rows.
-    requestAnimationFrame(() => {
+    refitTerminal(entry);
+  }, { passive: false });
+}
+
+// v0.19.4: fit the terminal reliably after a size or font change.
+// Prior versions did a single requestAnimationFrame → fit(). That worked
+// most of the time, but xterm sometimes needs TWO paint cycles to fully
+// stabilize character-cell metrics after a font-size change, especially
+// at larger fonts where fractional-pixel drift is bigger. Result: the
+// last visible row would clip because FitAddon computed rows with stale
+// metrics.
+//
+// Solution: fit once immediately for the fast path, then fit AGAIN after
+// a short delay to catch the case where character metrics were still
+// settling. The second fit is a no-op if nothing has changed.
+function refitTerminal(entry) {
+  if (!entry || !entry.fit || !entry.term) return;
+  const doFit = () => {
+    try {
       entry.fit.fit();
       window.api.sshResize(entry.sessionId, entry.term.cols, entry.term.rows);
-    });
-  }, { passive: false });
+    } catch (err) {
+      console.warn('[ShellSync] fit failed:', err);
+    }
+  };
+  requestAnimationFrame(doFit);
+  // Second pass ~50ms later — enough time for xterm to have fully remeasured
+  // the new character cell size at the new font, even on slower machines.
+  setTimeout(doFit, 50);
 }
 
 // --- Smart paste engine (v0.17.1) --------------------------------------
@@ -2186,12 +2225,9 @@ function applySettingsToAllTerminals() {
     t.term.options.fontWeight = settings.fontWeight;
     t.term.options.theme = settings.theme;
     t.localFontSize = settings.fontSize;
-    // Defer to next frame: xterm needs a beat to remeasure character cells
-    // at the new font size before fit() can compute correct cols/rows.
-    requestAnimationFrame(() => {
-      t.fit.fit();
-      window.api.sshResize(t.sessionId, t.term.cols, t.term.rows);
-    });
+    // v0.19.4: use the shared refit helper so the last row doesn't clip
+    // after a font-size change. See refitTerminal() for why we fit twice.
+    refitTerminal(t);
   }
 }
 
@@ -2518,18 +2554,23 @@ window.addEventListener('resize', () => {
 // output from a remote server does NOT count (we don't want a chatty log
 // stream from a server to prevent auto-lock forever).
 
-const AUTO_LOCK_MINUTES = 15;   // change here if you want a different default
-const AUTO_LOCK_MS = AUTO_LOCK_MINUTES * 60 * 1000;
+// v0.19.1: timeout comes from settings.autoLockMinutes. 0 disables auto-lock
+// entirely (App Login still gates initial launch, but the app never re-locks
+// during a session).
 let autoLockTimer = null;
 let autoLockEnabled = false;    // set true after successful login IF App Login is enabled
 
 function armAutoLock() {
   if (!autoLockEnabled) return;
-  if (autoLockTimer) clearTimeout(autoLockTimer);
+  if (autoLockTimer) { clearTimeout(autoLockTimer); autoLockTimer = null; }
+
+  const minutes = Number(settings.autoLockMinutes);
+  if (!minutes || minutes <= 0) return; // 0 = never lock
+
   autoLockTimer = setTimeout(() => {
-    console.log('[ShellSync] Auto-lock triggered after', AUTO_LOCK_MINUTES, 'minutes idle');
+    console.log('[ShellSync] Auto-lock triggered after', minutes, 'minutes idle');
     showLoginScreen();
-  }, AUTO_LOCK_MS);
+  }, minutes * 60 * 1000);
 }
 
 function bindAutoLockActivity() {
@@ -2547,6 +2588,15 @@ async function enableAutoLockIfNeeded() {
     autoLockEnabled = true;
     bindAutoLockActivity();
     armAutoLock();
-    console.log('[ShellSync] Auto-lock armed:', AUTO_LOCK_MINUTES, 'minutes');
+    const m = Number(settings.autoLockMinutes);
+    console.log('[ShellSync] Auto-lock armed:', m > 0 ? `${m} minutes` : 'disabled (0 = never)');
   }
+}
+
+// v0.19.1: called from the Settings dialog when the user changes the
+// auto-lock timeout. Re-arms with the new value (or cancels if set to 0).
+function refreshAutoLockAfterSettingChange() {
+  if (!autoLockEnabled) return; // App Login not on — nothing to re-arm
+  if (autoLockTimer) { clearTimeout(autoLockTimer); autoLockTimer = null; }
+  armAutoLock();
 }

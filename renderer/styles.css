@@ -593,6 +593,14 @@ body::before {
   color: var(--text-2);
   border-top: 1px solid var(--border-1);
   gap: 20px;
+  /* v0.19.5: solid background required. The status bar was fully
+     transparent, so if the terminal calculated even a fraction of a
+     row of overflow, that partial row bled through and made the text
+     look "cut off behind the status bar." Now the status bar opaquely
+     covers whatever's underneath. */
+  background: var(--bg-void, #0A0E17);
+  position: relative;
+  z-index: 5;
 }
 #connection-status { display: flex; align-items: center; gap: 8px; }
 .status-dot.connected {
@@ -729,7 +737,10 @@ body::before {
 
 .stat-detail {
   font-size: 10px;
-  color: var(--text-3);
+  /* v0.19.2: was var(--text-3) — too dim on the dark background. Bumped to
+     text-2 which is noticeably more readable while still being visually
+     secondary to the label and percentage above it. */
+  color: var(--text-2);
   font-family: var(--font-mono);
 }
 .stat-detail.na { color: var(--text-4); font-style: italic; }
@@ -770,7 +781,10 @@ body::before {
 .stat-row.compact .stat-detail {
   display: block;
   font-size: 9px;
-  color: var(--text-3);
+  /* v0.19.3: was var(--text-3) — this compact-row override was defeating the
+     v0.19.2 fix, since CPU and RAM live in "compact" rows and Disk doesn't.
+     Bumped to text-2 to match the standalone stat-detail rule. */
+  color: var(--text-2);
   font-family: var(--font-mono);
   white-space: nowrap;
   overflow: hidden;
@@ -2079,6 +2093,54 @@ kbd {
   color: var(--text-2, #aaa);
   margin: -4px 0 10px 0;
   line-height: 1.5;
+  font-style: italic;
+  opacity: 0.85;
+}
+
+/* --- Auto-lock timeout control (v0.19.1) ------------------------------
+   Sits under the App Login enable/manage panels. Same visual family as
+   the .mp-panel content but formatted as an inline label + number input. */
+.autolock-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 14px 0 4px 0;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--text-1, #e8ecf1);
+}
+.autolock-label {
+  font-size: 12px;
+  color: var(--text-1, #e8ecf1);
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 400;
+  margin: 0;
+}
+.autolock-input {
+  width: 70px;
+  padding: 6px 8px;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--border-cyan, rgba(0, 255, 255, 0.2));
+  color: var(--text-1, #e8ecf1);
+  border-radius: var(--r-sm, 4px);
+  font-family: var(--font-ui, inherit);
+  font-size: 13px;
+  text-align: center;
+}
+.autolock-input:focus {
+  outline: none;
+  border-color: var(--cyan, #00ffff);
+  box-shadow: 0 0 0 2px rgba(0, 255, 255, 0.15);
+}
+.autolock-suffix {
+  color: var(--text-2, #aaa);
+  font-size: 12px;
+}
+.autolock-hint {
+  font-size: 11px !important;
+  color: var(--text-2, #aaa) !important;
+  margin: 4px 0 0 0 !important;
   font-style: italic;
   opacity: 0.85;
 }

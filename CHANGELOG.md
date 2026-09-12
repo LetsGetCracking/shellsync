@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Security-relevant changes are marked with **[SECURITY]**.
 
+## [0.19.5] — 2026-09
+
+### Fixed
+
+- **Terminal text no longer bleeds through the status bar.** The bottom-row clipping issue that v0.18.2 through v0.19.4 tried to fix wasn't actually a FitAddon calculation problem — it was a CSS transparency issue. The status bar at the bottom (showing the connection info like `user@host`) had no background, so any partial row the terminal rendered underneath it showed through, making it look like the last line was being cut off. Now the status bar has a solid opaque background and sits above the terminal in z-order. Applies at every font size.
+
+## [0.19.4] — 2026-09
+
+### Fixed
+
+- **Last row of terminal output no longer gets clipped after changing font size.** Previously, using Ctrl+Scroll to zoom or changing the font in Settings could leave the bottom row half-cut-off. The fix in v0.18.2 (extra bottom padding) worked at one specific font size but drifted at others. Root cause: xterm sometimes needs two paint cycles to fully stabilize character-cell metrics after a font-size change; FitAddon was running with stale measurements on the first cycle. Now we fit twice — once immediately and once ~50ms later — so the row count is always correct after a font change, regardless of size.
+
+## [0.19.3] — 2026-09
+
+### Fixed
+
+- **Stats panel readability fix now actually applies to CPU and RAM.** v0.19.2 lightened the caption text under stats, but the change only took effect on the Disk row — CPU and RAM use a more-specific "compact" layout that had its own color override I missed. Fixed the override too, so all three rows now use the same readable color.
+
+## [0.19.2] — 2026-09
+
+### Changed
+
+- **Stats panel detail text is now more readable.** The small gray captions under Disk / CPU / RAM (`8.8 GB / 14.7 GB · 5.1 GB free`, `4 cores`, memory totals) were using the third-tier text color, which was hard to read against the dark background. Bumped up one tier — still visually secondary to the label and percentage above it, but now legible without squinting.
+
+## [0.19.1] — 2026-09
+
+### Changed
+
+- **Auto-lock timeout is now configurable.** Previously hardcoded to 15 minutes. New numeric field in Settings under App Login — enter any number of minutes (default 15), or **0 to never re-lock during a session**. Changes take effect immediately without needing to restart the app.
+
 ## [0.19.0] — 2026-09
 
 ### Fixed
