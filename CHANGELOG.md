@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Security-relevant changes are marked with **[SECURITY]**.
 
+## [0.19.9] — 2026-10
+
+### Added
+
+- **Saved commands per session.** Right-click any SSH session → **Saved commands...** opens a dialog where you can store frequently-used command snippets with a name. Click a snippet's title to open the standard multi-line paste preview with the command pre-filled — tweak it if you need, confirm to run through the smart paste engine (so heredocs, auto-execute-last-line, and everything else from v0.19.7–v0.19.8 all work). Snippets persist with the session data, so they survive restarts and travel through session exports/imports.
+
+## [0.19.8] — 2026-09
+
+### Fixed
+
+- **Smart paste no longer hangs on heredocs and multi-line shell constructs.** Previously, pasting something like `cat > file <<'EOF'\n...\nEOF` would freeze with the banner "Still waiting for the shell prompt (line 1/4)". The engine was splitting on newlines and waiting for the normal shell prompt between lines, but a heredoc puts bash into "continuation mode" showing `>` as the prompt instead — the engine didn't recognize that and got stuck forever. Also affected: commands using trailing-backslash line continuation (`foo \\\n  --bar`) and unbalanced quotes spanning multiple lines. Now the paste engine detects these constructs in the preview text and sends the whole paste as one atomic chunk, which is how SolarPuTTY handles everything. Normal multi-command sequences (`cd ~; ls; docker compose up`) still use the smart line-by-line engine with prompt detection, so long-running commands still work correctly.
+
+## [0.19.7] — 2026-09
+
+### Fixed
+
+- **Smart paste now executes the last line automatically.** Previously, multi-line pastes would run every line EXCEPT the last one, which was just typed into the prompt for the user to press Enter on. The comment in the code claimed this matched SolarPuTTY, but SolarPuTTY actually auto-executes the last line — the comment was wrong. This was especially annoying for setup scripts ending in `docker compose up`, `sudo systemctl restart`, or similar — you'd watch the whole script run except the last, most important command. Now every pasted line, including the last, gets its Enter automatically.
+
+## [0.19.6] — 2026-09
+
+### Fixed
+
+- **The actual root cause of the bottom-row clipping bug.** v0.18.2, v0.19.4, and v0.19.5 all took different swings at this without solving it. The real issue was a classic flexbox gotcha: `#main` (which contains the tab bar, terminal, and status bar as a vertical stack) didn't have `min-height: 0`, so flexbox let it grow to fit its content instead of clamping it to the grid cell. When the terminal accumulated many rows of output, `#main` overflowed its cell downward and pushed the status bar past the visible viewport, hiding the last few rows of terminal text. Adding `min-height: 0` clamps `#main` properly — the status bar now sits at the bottom of its assigned space and the terminal is confined above it at every font size and every window height.
+
 ## [0.19.5] — 2026-09
 
 ### Fixed

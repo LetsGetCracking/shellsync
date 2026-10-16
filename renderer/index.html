@@ -61,6 +61,43 @@
     </div>
   </div>
 
+  <!-- v0.19.9: Saved commands per-session — list + edit/new -->
+  <div id="saved-commands-dialog" class="dialog hidden">
+    <div class="dialog-inner card" style="min-width:560px;max-width:720px;">
+      <h3><span data-icon="bookmark"></span> Saved commands — <span id="sc-session-name"></span></h3>
+      <p class="dialog-desc">
+        Click a command's title to open the multi-line paste preview with it pre-filled
+        (edit if needed, then confirm to run it on this session).
+      </p>
+      <div id="sc-list" class="sc-list">
+        <div class="sc-empty">No saved commands yet.</div>
+      </div>
+      <div class="dialog-actions">
+        <button id="sc-new" class="btn-primary"><span data-icon="plus"></span> New command</button>
+        <button id="sc-close"><span data-icon="x"></span> Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- v0.19.9: edit/create a saved command — simple name + multi-line body -->
+  <div id="snippet-edit-dialog" class="dialog hidden">
+    <div class="dialog-inner card" style="min-width:560px;max-width:720px;">
+      <h3 id="snippet-edit-title"><span data-icon="edit"></span> New command</h3>
+      <label>Name
+        <input id="snippet-name" placeholder="e.g. Restart docker stack" maxlength="80" />
+      </label>
+      <label>Command (one or more lines)
+        <textarea id="snippet-command" rows="10"
+          placeholder="cd ~/my-app&#10;docker compose down&#10;docker compose up -d --build"
+          spellcheck="false"></textarea>
+      </label>
+      <div class="dialog-actions">
+        <button id="snippet-cancel"><span data-icon="x"></span> Cancel</button>
+        <button id="snippet-save" class="btn-primary"><span data-icon="save"></span> Save</button>
+      </div>
+    </div>
+  </div>
+
   <!-- =========== CUSTOM TITLE BAR =========== -->
   <div id="titlebar">
     <div class="tb-drag">

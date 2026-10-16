@@ -530,6 +530,11 @@ function migrateSession(s) {
     username: s.username,
     tags: Array.isArray(s.tags) ? s.tags : [],
     lastConnected: s.lastConnected || 0,
+    // v0.19.9: per-session saved commands. Each entry is { id, name, command }.
+    // name is a short label the user picks ("Restart docker stack"), command is
+    // the text (can be multi-line) that gets fed through the paste engine when
+    // the user clicks the saved command's title.
+    savedCommands: Array.isArray(s.savedCommands) ? s.savedCommands : [],
   };
   if (type === 'ssh') {
     return {
@@ -662,11 +667,22 @@ function renderSessionItem(s) {
   li.onclick = () => openSession(s);
   li.oncontextmenu = (e) => {
     e.preventDefault();
-    showContextMenu(e.clientX, e.clientY, [
+    // v0.19.9: SSH-only — "Saved commands..." gives per-session snippet
+    // list that opens the paste preview on click. RDP sessions have no shell
+    // to paste into, so the item is hidden for them.
+    const items = [
       { label: 'Open', icon: 'play', onClick: () => openSession(s) },
       { label: 'Edit...', icon: 'edit', onClick: () => openSessionDialog(s) },
+    ];
+    if (s.type !== 'rdp') {
+      items.push({ label: 'Saved commands...', icon: 'bookmark', onClick: () => openSavedCommandsDialog(s) });
+    }
+    items.push(
       { label: 'Move to folder...', icon: 'folder', onClick: () => moveSessionToFolder(s) },
       { sep: true },
+    );
+    showContextMenu(e.clientX, e.clientY, [
+      ...items,
       { label: 'Delete', icon: 'trash', onClick: async () => {
         // For RDP sessions with saved Windows credentials, offer to also
         // remove the Credential Manager entry so we don't leave orphaned
@@ -1879,9 +1895,17 @@ function sendNextPasteLine(entry) {
   ps.index++;
 
   if (isLastLine) {
-    // Last line — send WITHOUT the trailing \r so the user reviews and
-    // presses Enter themselves. Matches SolarPuTTY behavior exactly.
-    window.api.sshWrite(entry.sessionId, line);
+    // v0.19.7: send the last line WITH \r so it actually executes.
+    // Previously we sent it without the trailing carriage return, expecting
+    // the user to press Enter themselves — but the comment claiming "matches
+    // SolarPuTTY behavior exactly" was wrong: SolarPuTTY DOES execute the
+    // last pasted line automatically. That's the whole point of pasting a
+    // multi-line script — you want it to run end-to-end. Stopping on the
+    // last line was surprising: users would paste a setup script, watch
+    // every line execute, then wonder why the last `docker compose up`
+    // command just sat there un-executed. Now every line, including the
+    // last, gets its Enter.
+    window.api.sshWrite(entry.sessionId, line + '\r');
     entry.pasteState = null;
     hidePasteBanner(entry);
     return;
@@ -1940,6 +1964,43 @@ function hidePasteBanner(entry) {
 // Central paste router. Called from both Ctrl+V (DOM paste event) and
 // right-click paste. Single-line pastes go straight through. Multi-line
 // pastes show the preview dialog, then feed the smart engine.
+// v0.19.8: detect pastes that MUST be sent as one atomic chunk because
+// splitting them by newline would break them. The smart line-by-line engine
+// is great for sequences of independent commands, but it fights against:
+//
+//   1. Heredocs: `cat > file <<EOF\n...\nEOF`. After the first line, bash is
+//      in heredoc mode showing `>` as a continuation prompt — the smart
+//      engine doesn't recognize `>` as "ready for next command" and gets
+//      stuck waiting forever.
+//   2. Line continuations with trailing backslash: `foo \\\n  --bar \\\n baz`.
+//      Each `\` + newline means "this is still the same command" — splitting
+//      runs each half-command separately.
+//   3. Unclosed quotes spanning lines: `echo "hello\nworld"` as literal
+//      multi-line string. Splitting would execute `echo "hello` as its own
+//      broken command.
+//
+// For any of these, bail out of the smart engine and dump the whole text
+// through sshWrite as one chunk — bash's readline handles embedded newlines
+// in pasted input correctly, which is how SolarPuTTY handles everything.
+function needsAtomicPaste(text) {
+  // Heredoc: a `<<` (optionally `<<-`) followed by an optionally-quoted word.
+  // Only trigger if there's content AFTER the heredoc opener (would be a
+  // single-line paste otherwise and never reach this function).
+  if (/<<-?\s*(['"]?)[A-Za-z_][A-Za-z0-9_]*\1/.test(text)) return true;
+
+  // Line continuation: a `\` immediately before a newline.
+  if (/\\\n/.test(text)) return true;
+
+  // Unbalanced single or double quotes across the whole paste. Not perfect
+  // (doesn't understand escapes inside quotes), but good enough to catch
+  // obvious multi-line strings.
+  const singleQuotes = (text.match(/(?<!\\)'/g) || []).length;
+  const doubleQuotes = (text.match(/(?<!\\)"/g) || []).length;
+  if (singleQuotes % 2 !== 0 || doubleQuotes % 2 !== 0) return true;
+
+  return false;
+}
+
 async function sendPasteToShell(entry, text) {
   if (!text) return;
   const normalized = String(text).replace(/\r\n/g, '\n').replace(/\r/g, '\n');
@@ -1960,6 +2021,22 @@ async function sendPasteToShell(entry, text) {
     sessionName,
   });
   if (finalText === null) return; // user cancelled
+
+  // v0.19.8: if the paste contains heredocs, line continuations, or unclosed
+  // quotes, the smart line-by-line engine would break it. Send atomically.
+  if (needsAtomicPaste(finalText)) {
+    cancelSmartPaste(entry);
+    // Preserve interior newlines; ensure a trailing newline so the LAST
+    // command still executes (matches the v0.19.7 behavior for the smart
+    // engine's last line).
+    let atomic = finalText.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    if (!atomic.endsWith('\n')) atomic += '\n';
+    // Bash's readline treats \r as "execute this line" during a paste; use
+    // \r rather than \n for the embedded line terminators.
+    atomic = atomic.replace(/\n/g, '\r');
+    window.api.sshWrite(entry.sessionId, atomic);
+    return;
+  }
 
   // Kick off the smart engine.
   const lines = finalText.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
@@ -2600,3 +2677,183 @@ function refreshAutoLockAfterSettingChange() {
   if (autoLockTimer) { clearTimeout(autoLockTimer); autoLockTimer = null; }
   armAutoLock();
 }
+
+// --- Saved commands (v0.19.9) ------------------------------------------
+// Per-session command snippets. Right-click a session → "Saved commands..."
+// opens a dialog listing them. Clicking a snippet's title opens the standard
+// multi-line paste preview with the command pre-filled — user can tweak it
+// and confirm to run through the smart paste engine (same path as any paste,
+// so heredocs, auto-execute-last-line, etc. all work).
+//
+// Snippets live on the session object (session.savedCommands) and persist
+// through the normal sessions.json save path.
+
+let scDialogSession = null;      // which session the "Saved commands" dialog is showing
+let scEditingSnippetId = null;   // null when creating new, snippet id when editing
+
+function openSavedCommandsDialog(session) {
+  scDialogSession = session;
+  document.getElementById('sc-session-name').textContent = session.name;
+  renderSnippetsList();
+  document.getElementById('saved-commands-dialog').classList.remove('hidden');
+}
+
+function closeSavedCommandsDialog() {
+  document.getElementById('saved-commands-dialog').classList.add('hidden');
+  scDialogSession = null;
+}
+
+function renderSnippetsList() {
+  const container = document.getElementById('sc-list');
+  if (!scDialogSession) return;
+  const snippets = scDialogSession.savedCommands || [];
+  if (snippets.length === 0) {
+    container.innerHTML = '<div class="sc-empty">No saved commands yet. Click "+ New command" to add one.</div>';
+    return;
+  }
+  container.innerHTML = '';
+  snippets.forEach(snip => {
+    // First non-empty line is the preview — show up to ~70 chars
+    const firstLine = (snip.command || '').split('\n').find(l => l.trim()) || '';
+    const preview = firstLine.length > 70 ? firstLine.slice(0, 70) + '…' : firstLine;
+    const lineCount = (snip.command || '').split('\n').length;
+    const lineBadge = lineCount > 1 ? ` <span style="opacity:0.6">(${lineCount} lines)</span>` : '';
+
+    const row = document.createElement('div');
+    row.className = 'sc-item';
+    row.innerHTML = `
+      <span class="sc-icon">${window.icon('play', 14)}</span>
+      <div class="sc-meta">
+        <div class="sc-name">${escapeHtml(snip.name)}${lineBadge}</div>
+        <div class="sc-preview">${escapeHtml(preview)}</div>
+      </div>
+      <div class="sc-actions">
+        <button class="sc-edit" title="Edit"><span data-icon="edit"></span></button>
+        <button class="sc-delete danger" title="Delete"><span data-icon="trash"></span></button>
+      </div>
+    `;
+    // Click the row (except the action buttons) → run the command
+    row.onclick = (e) => {
+      if (e.target.closest('.sc-actions')) return;
+      runSnippet(snip);
+    };
+    row.querySelector('.sc-edit').onclick = (e) => {
+      e.stopPropagation();
+      openSnippetEditor(snip);
+    };
+    row.querySelector('.sc-delete').onclick = async (e) => {
+      e.stopPropagation();
+      const ok = await window.showConfirmDialog({
+        title: 'Delete command',
+        message: `Delete "${snip.name}"? This can't be undone.`,
+        confirmLabel: 'Delete',
+        danger: true,
+      });
+      if (!ok) return;
+      scDialogSession.savedCommands = scDialogSession.savedCommands.filter(x => x.id !== snip.id);
+      await window.api.setSessions(savedSessions);
+      renderSnippetsList();
+    };
+    container.appendChild(row);
+  });
+  hydrateIcons(container);
+}
+
+// Run a snippet: find the active tab for this session, then feed the
+// command text through the same paste pipeline a Ctrl+V would. If no tab
+// is open for the session, toast and bail — user can open the session and
+// try again. Keeps the behavior predictable.
+async function runSnippet(snip) {
+  // Look for any open tab bound to this session
+  let targetEntry = null;
+  for (const t of tabs.values()) {
+    if (t.session && t.session.id === scDialogSession.id) {
+      targetEntry = t;
+      break;
+    }
+  }
+  if (!targetEntry) {
+    showToast(`Open "${scDialogSession.name}" first, then try again.`);
+    return;
+  }
+  if (!targetEntry.connected) {
+    showToast(`"${scDialogSession.name}" is not connected. Reconnect and try again.`);
+    return;
+  }
+  // Close this dialog so the paste preview is unobstructed
+  closeSavedCommandsDialog();
+  // Switch to that tab so the paste preview + execution happens in view
+  setActiveTab(getTabIdFor(targetEntry));
+  // Feed it through sendPasteToShell — opens the preview dialog so user
+  // can tweak the command before confirming, then runs through the smart
+  // paste engine (handles heredocs, auto-executes last line, etc.)
+  await sendPasteToShell(targetEntry, snip.command);
+}
+
+function openSnippetEditor(snip) {
+  scEditingSnippetId = snip ? snip.id : null;
+  document.getElementById('snippet-edit-title').innerHTML =
+    `<span data-icon="${snip ? 'edit' : 'plus'}"></span> ${snip ? 'Edit command' : 'New command'}`;
+  document.getElementById('snippet-name').value = snip ? snip.name : '';
+  document.getElementById('snippet-command').value = snip ? snip.command : '';
+  document.getElementById('snippet-edit-dialog').classList.remove('hidden');
+  setTimeout(() => document.getElementById('snippet-name').focus(), 50);
+  hydrateIcons(document.getElementById('snippet-edit-dialog'));
+}
+
+function closeSnippetEditor() {
+  document.getElementById('snippet-edit-dialog').classList.add('hidden');
+  scEditingSnippetId = null;
+}
+
+async function saveSnippetFromEditor() {
+  if (!scDialogSession) return;
+  const name = document.getElementById('snippet-name').value.trim();
+  const command = document.getElementById('snippet-command').value;
+  if (!name) {
+    showToast('Give the command a name first.');
+    document.getElementById('snippet-name').focus();
+    return;
+  }
+  if (!command.trim()) {
+    showToast('Command text is empty.');
+    document.getElementById('snippet-command').focus();
+    return;
+  }
+  if (!scDialogSession.savedCommands) scDialogSession.savedCommands = [];
+  if (scEditingSnippetId) {
+    // Updating an existing snippet
+    const idx = scDialogSession.savedCommands.findIndex(x => x.id === scEditingSnippetId);
+    if (idx >= 0) {
+      scDialogSession.savedCommands[idx] = { ...scDialogSession.savedCommands[idx], name, command };
+    }
+  } else {
+    // New snippet
+    scDialogSession.savedCommands.push({
+      id: crypto.randomUUID(),
+      name,
+      command,
+    });
+  }
+  await window.api.setSessions(savedSessions);
+  closeSnippetEditor();
+  renderSnippetsList();
+}
+
+function bindSavedCommandsDialogs() {
+  document.getElementById('sc-close').onclick = closeSavedCommandsDialog;
+  document.getElementById('sc-new').onclick = () => openSnippetEditor(null);
+  document.getElementById('saved-commands-dialog').addEventListener('click', (e) => {
+    if (e.target.id === 'saved-commands-dialog') closeSavedCommandsDialog();
+  });
+
+  document.getElementById('snippet-cancel').onclick = closeSnippetEditor;
+  document.getElementById('snippet-save').onclick = saveSnippetFromEditor;
+  document.getElementById('snippet-edit-dialog').addEventListener('click', (e) => {
+    if (e.target.id === 'snippet-edit-dialog') closeSnippetEditor();
+  });
+}
+
+// Call the binding once the DOM is ready — it's safe to call here since
+// init() runs after DOMContentLoaded in this app.
+bindSavedCommandsDialogs();

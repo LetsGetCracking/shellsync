@@ -442,6 +442,18 @@ body::before {
 #main {
   display: flex; flex-direction: column;
   min-width: 0;
+  /* v0.19.6: without this, #main's default min-height is `auto` which means
+     it grows to fit all its content. When the terminal has many rows, the
+     workspaces div (flex:1) reports its size as "whatever the terminal
+     needs" and the whole #main overflows its grid cell downward, pushing
+     the status bar off the bottom edge of the viewport. min-height:0
+     lets flexbox properly distribute vertical space — #main stays clamped
+     to its grid cell, #workspaces takes what's left after tab-bar and
+     status-bar consume their intrinsic heights, and the terminal is
+     confined to that space. This is the actual fix for the
+     "bottom row clipping" bug that v0.18.2, v0.19.4, and v0.19.5 all
+     tried to solve from different angles. */
+  min-height: 0;
   position: relative;
 }
 
@@ -2143,4 +2155,120 @@ kbd {
   margin: 4px 0 0 0 !important;
   font-style: italic;
   opacity: 0.85;
+}
+
+/* --- Saved commands dialog (v0.19.9) ----------------------------------
+   Per-session snippet list. Each row shows the title (click = run through
+   paste preview), with hover-revealed Edit/Delete icons on the right. */
+.sc-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 50vh;
+  overflow-y: auto;
+  margin: 12px 0 16px;
+  padding-right: 4px;
+}
+.sc-empty {
+  text-align: center;
+  color: var(--text-3, #556072);
+  font-style: italic;
+  padding: 28px 10px;
+  font-size: 13px;
+}
+.sc-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--border-2, rgba(255, 255, 255, 0.06));
+  border-radius: var(--r-md, 6px);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.sc-item:hover {
+  background: rgba(0, 255, 255, 0.06);
+  border-color: var(--cyan-dim, rgba(0, 255, 255, 0.4));
+  box-shadow: 0 0 10px rgba(0, 255, 255, 0.1);
+}
+.sc-item .sc-icon {
+  color: var(--cyan, #00ffff);
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+.sc-item .sc-meta {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.sc-item .sc-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-1, #e8ecf1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sc-item .sc-preview {
+  font-size: 11px;
+  color: var(--text-2, #8892a6);
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0.85;
+}
+.sc-item .sc-actions {
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.sc-item:hover .sc-actions {
+  opacity: 1;
+}
+.sc-item .sc-actions button {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-2, #8892a6);
+  padding: 4px 8px;
+  border-radius: var(--r-sm, 4px);
+  cursor: pointer;
+  font-size: 11px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  transition: all 0.15s;
+}
+.sc-item .sc-actions button:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-1, #e8ecf1);
+}
+.sc-item .sc-actions button.danger:hover {
+  background: rgba(255, 51, 102, 0.1);
+  color: var(--danger, #ff3366);
+  border-color: rgba(255, 51, 102, 0.3);
+}
+
+/* snippet edit dialog — give the command textarea a monospace font */
+#snippet-edit-dialog textarea {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  background: rgba(0, 0, 0, 0.4);
+  color: var(--text-1, #e8ecf1);
+  border: 1px solid var(--border-cyan, rgba(0, 255, 255, 0.2));
+  border-radius: var(--r-sm, 4px);
+  padding: 10px 12px;
+  width: 100%;
+  resize: vertical;
+  min-height: 120px;
+}
+#snippet-edit-dialog textarea:focus {
+  outline: none;
+  border-color: var(--cyan, #00ffff);
+  box-shadow: 0 0 0 2px rgba(0, 255, 255, 0.15);
 }
