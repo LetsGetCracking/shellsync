@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Security-relevant changes are marked with **[SECURITY]**.
 
+## [0.19.15] — 2026-11
+
+### Added
+
+- **[SECURITY] Lock ShellSync on demand from the user icon menu.** Clicking the user avatar in the top-right of the title bar now opens a small dropdown with a **Lock ShellSync** option. Picking it immediately shows the App Login lock screen so you can walk away from your desk without leaving an open SSH window behind. If App Login hasn't been set up yet, the menu item explains that a password is needed first and offers to open Settings for you (you can't lock what isn't passworded). Pairs with the existing auto-lock-on-inactivity timer from v0.19.1 — auto-lock covers "I forgot to lock it", and this menu item covers "I'm getting up right now".
+
+## [0.19.14] — 2026-10
+
+### Fixed
+
+- **macOS build is now properly ad-hoc signed.** v0.19.13's build config set `identity: null` on the Mac target, which told electron-builder to skip code signing entirely. The resulting `.app` had Identifier `Electron` (the raw framework identifier) instead of `com.example.shellsync`, no sealed resources, and an unbound Info.plist. Modern macOS XProtect sees that shape as "tampered Electron bundle" and quarantines the app on launch (shown as "Malware Blocked and Moved to Trash"). Fix: removed `identity: null` so electron-builder stops skipping signing, and added an explicit `codesign --force --deep --sign -` post-build step so the resulting bundle has a correct ad-hoc signature with the proper identifier and sealed resources. XProtect no longer flags it.
+
+### Added
+
+- **Proper macOS icon.** The build now ships `build/icon.icns` (generated from the existing Windows icon) so the Mac app uses the ShellSync icon in Finder, Dock, and the App Switcher instead of the generic Electron icon.
+
+## [0.19.13] — 2026-10
+
+### Added
+
+- **macOS support (Apple Silicon).** The build now produces a `.dmg` for M-series Macs via `npm run build:mac`. On macOS, the RDP toggle in the New Session dialog is hidden (since `mstsc.exe` is Windows-only); existing RDP sessions still appear in the sidebar (with a strikethrough on the badge) so a user who syncs `sessions.json` between Windows and Mac doesn't lose data, but clicking one shows a "RDP only works on Windows" toast. SSH and SFTP both work on Mac exactly as they do on Windows — the ssh2 Node library is platform-independent. First Mac build is unsigned; code signing + notarization will come later.
+- **`build:win` and `build:mac` npm scripts.** Explicit per-platform build commands so you can be clear about which target you're producing. `npm run build` still defaults to Windows for back-compat.
+
+## [0.19.12] — 2026-10
+
+### Removed
+
+- **Active Directory sign-in (introduced briefly in v0.19.11) has been removed.** Reverted to the v0.19.10 behaviour: App Login + local password only, no LDAP client, no AD settings section. If you ran v0.19.11 and had AD config saved, the old block in `%APPDATA%\ShellSync\settings.json` (`"ad": { ... }`) is simply ignored now — nothing reads it. Safe to delete that block manually if you want a clean file, but not required.
+
+## [0.19.10] — 2026-10
+
+### Added
+
+- **Reorder saved commands.** Each row in the Saved commands dialog now has up/down arrow buttons alongside Edit/Delete, so you can rearrange snippets into whatever order makes sense. The up arrow is disabled on the first row and down on the last, so you can't accidentally move an entry off the ends. Order persists with the session data like the snippets themselves.
+
 ## [0.19.9] — 2026-10
 
 ### Added

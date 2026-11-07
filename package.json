@@ -1,11 +1,13 @@
 {
   "name": "shellsync",
-  "version": "0.19.9",
+  "version": "0.19.15",
   "description": "ShellSync — A sleek futuristic SSH client with integrated SFTP transfer",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
     "build": "electron-builder --win",
+    "build:win": "electron-builder --win",
+    "build:mac": "electron-builder --mac && codesign --force --deep --sign - dist/mac-arm64/ShellSync.app && echo '[ShellSync] Ad-hoc re-signed dist/mac-arm64/ShellSync.app'",
     "build:installer": "electron-builder --win nsis",
     "build:portable": "electron-builder --win portable",
     "build:both": "electron-builder --win nsis portable"
@@ -44,6 +46,15 @@
     },
     "portable": {
       "artifactName": "${productName}-Portable-${version}.${ext}"
+    },
+    "mac": {
+      "target": [{ "target": "dmg", "arch": ["arm64"] }],
+      "artifactName": "${productName}-${version}-arm64.${ext}",
+      "category": "public.app-category.developer-tools",
+      "icon": "build/icon.icns"
+    },
+    "dmg": {
+      "title": "ShellSync ${version}"
     }
   }
 }

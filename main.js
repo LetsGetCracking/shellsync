@@ -1133,6 +1133,14 @@ async function deleteRdpCredentials({ host }) {
   });
 }
 
-ipcMain.handle('rdp:launch', (_e, session) => launchRdpSession(session));
-ipcMain.handle('rdp:saveCredentials', (_e, data) => saveRdpCredentials(data));
-ipcMain.handle('rdp:deleteCredentials', (_e, data) => deleteRdpCredentials(data));
+// v0.19.13: RDP handlers only make sense on Windows (they shell out to
+// mstsc.exe and cmdkey.exe, which don't exist on Mac/Linux). On other
+// platforms, return a predictable error so the renderer can show a toast
+// instead of hanging on a never-resolving spawn.
+const RDP_NON_WIN_ERROR = { ok: false, error: 'RDP sessions are only supported on Windows.' };
+ipcMain.handle('rdp:launch', (_e, session) =>
+  process.platform === 'win32' ? launchRdpSession(session) : RDP_NON_WIN_ERROR);
+ipcMain.handle('rdp:saveCredentials', (_e, data) =>
+  process.platform === 'win32' ? saveRdpCredentials(data) : RDP_NON_WIN_ERROR);
+ipcMain.handle('rdp:deleteCredentials', (_e, data) =>
+  process.platform === 'win32' ? deleteRdpCredentials(data) : RDP_NON_WIN_ERROR);

@@ -1,6 +1,11 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('api', {
+  // v0.19.13: expose the running OS to the renderer so platform-specific
+  // UI (e.g. hiding RDP options on macOS, where mstsc.exe doesn't exist)
+  // can be toggled without IPC round-trips. Values: 'win32', 'darwin', 'linux'.
+  platform: process.platform,
+
   getSettings: () => ipcRenderer.invoke('settings:get'),
   loginStatus: () => ipcRenderer.invoke('login:status'),
   loginEnable: (password) => ipcRenderer.invoke('login:enable', { password }),

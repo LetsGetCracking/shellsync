@@ -195,6 +195,16 @@ function setCustomSelectVisible(selectId, visible) {
 (async function init() {
 try {
   console.log('[ShellSync] Init starting...');
+  // v0.19.13: tag <body> with the OS so CSS can hide platform-specific
+  // UI (e.g. the RDP toggle on macOS, since mstsc.exe is Windows-only).
+  // Values: platform-win32, platform-darwin, platform-linux.
+  try {
+    const p = (window.api && window.api.platform) || 'win32';
+    document.body.classList.add('platform-' + p);
+    console.log('[ShellSync] Platform:', p);
+  } catch (e) {
+    console.warn('[ShellSync] platform tag failed:', e);
+  }
   document.getElementById('brand-logo').innerHTML = LOGO_SVG;
   document.getElementById('tb-logo').innerHTML = LOGO_SVG;
   hydrateIcons(document);
@@ -316,6 +326,53 @@ function bindTitleBar() {
   document.getElementById('tb-min').onclick = () => window.api.winMinimize();
   document.getElementById('tb-max').onclick = () => window.api.winMaximizeToggle();
   document.getElementById('tb-close').onclick = () => window.api.winClose();
+  // v0.19.15: user-icon dropdown menu with "Lock ShellSync" option. Clicking
+  // the avatar in the top-right opens a context menu positioned just below
+  // the icon (so it doesn't go off the top-right edge of the window).
+  const avatar = document.getElementById('tb-avatar');
+  if (avatar) {
+    avatar.onclick = (e) => {
+      e.stopPropagation();
+      const r = avatar.getBoundingClientRect();
+      // Open the menu flush-right under the avatar; showContextMenu
+      // re-adjusts if it would overflow the viewport.
+      showContextMenu(r.right - 180, r.bottom + 4, [
+        { label: 'Lock ShellSync', icon: 'lock', onClick: () => lockShellSync() },
+      ]);
+    };
+  }
+}
+
+// v0.19.15: lock the app on demand. If App Login is enabled, show the
+// lock screen immediately — the existing unlock flow (type password, hit
+// Enter or Unlock) re-hides it on success. If App Login isn't enabled yet,
+// we can't actually lock anything, so prompt the user to set one up and
+// jump them to Settings if they agree.
+async function lockShellSync() {
+  let status;
+  try {
+    status = await window.api.loginStatus();
+  } catch (err) {
+    console.error('[ShellSync] loginStatus failed:', err);
+    status = { enabled: false };
+  }
+  if (status && status.enabled) {
+    showLoginScreen();
+    return;
+  }
+  // No password set — explain and offer to open Settings
+  const ok = await window.showConfirmDialog({
+    title: 'App Login not set up',
+    message: 'You need to set an App Login password before ShellSync can be locked. Open Settings now to create one?',
+    confirmLabel: 'Open Settings',
+    cancelLabel: 'Not now',
+  });
+  if (ok) {
+    document.getElementById('settings-dialog').classList.remove('hidden');
+    // Scroll to the App Login section if we can find it
+    const section = document.getElementById('al-status-row');
+    if (section) setTimeout(() => section.scrollIntoView({ behavior: 'smooth', block: 'center' }), 150);
+  }
 }
 
 // --- Server stats panel (Disk / CPU / RAM) -----------------------------
@@ -941,8 +998,14 @@ async function openSessionDialog(existing) {
   editingPasswordDirty = false;
   const type = existing ? (existing.type || 'ssh') : 'ssh';
 
+  // v0.19.13: on non-Windows (Mac/Linux), the RDP toggle is hidden by CSS
+  // and the title drops the "or RDP" wording. Any existing RDP sessions
+  // in the session store still render in the sidebar (so a user who syncs
+  // sessions between Windows and Mac doesn't lose them), but you can't
+  // create new RDP sessions here.
+  const isWin = !window.api || window.api.platform === 'win32';
   document.getElementById('session-dialog-title').textContent =
-    existing ? 'Edit Session' : 'New SSH or RDP Session';
+    existing ? 'Edit Session' : (isWin ? 'New SSH or RDP Session' : 'New SSH Session');
 
   refreshFolderDropdown();
   document.getElementById('s-name').value = existing ? existing.name : '';
@@ -1578,6 +1641,14 @@ function openSession(session, opts = {}) {
   // RDP sessions delegate to mstsc.exe — no ShellSync tab is created,
   // because the RDP UI is Microsoft's native window. See openRdpSession.
   if (session.type === 'rdp') {
+    // v0.19.13: on non-Windows, there's no mstsc.exe to delegate to. We
+    // keep the session in the sidebar (so Windows users who share this
+    // sessions.json with a Mac don't lose data), but opening it is a toast.
+    const isWin = !window.api || window.api.platform === 'win32';
+    if (!isWin) {
+      showToast('RDP sessions are only supported on Windows.');
+      return;
+    }
     openRdpSession(session);
     return;
   }
@@ -2712,12 +2783,17 @@ function renderSnippetsList() {
     return;
   }
   container.innerHTML = '';
-  snippets.forEach(snip => {
+  snippets.forEach((snip, idx) => {
     // First non-empty line is the preview — show up to ~70 chars
     const firstLine = (snip.command || '').split('\n').find(l => l.trim()) || '';
     const preview = firstLine.length > 70 ? firstLine.slice(0, 70) + '…' : firstLine;
     const lineCount = (snip.command || '').split('\n').length;
     const lineBadge = lineCount > 1 ? ` <span style="opacity:0.6">(${lineCount} lines)</span>` : '';
+
+    // v0.19.10: disable up on first row and down on last row so you can't
+    // move a snippet off either end of the list.
+    const isFirst = idx === 0;
+    const isLast = idx === snippets.length - 1;
 
     const row = document.createElement('div');
     row.className = 'sc-item';
@@ -2728,6 +2804,8 @@ function renderSnippetsList() {
         <div class="sc-preview">${escapeHtml(preview)}</div>
       </div>
       <div class="sc-actions">
+        <button class="sc-up" title="Move up" ${isFirst ? 'disabled' : ''}><span data-icon="chevron-up"></span></button>
+        <button class="sc-down" title="Move down" ${isLast ? 'disabled' : ''}><span data-icon="chevron-down"></span></button>
         <button class="sc-edit" title="Edit"><span data-icon="edit"></span></button>
         <button class="sc-delete danger" title="Delete"><span data-icon="trash"></span></button>
       </div>
@@ -2736,6 +2814,16 @@ function renderSnippetsList() {
     row.onclick = (e) => {
       if (e.target.closest('.sc-actions')) return;
       runSnippet(snip);
+    };
+    row.querySelector('.sc-up').onclick = (e) => {
+      e.stopPropagation();
+      if (isFirst) return;
+      moveSnippet(idx, idx - 1);
+    };
+    row.querySelector('.sc-down').onclick = (e) => {
+      e.stopPropagation();
+      if (isLast) return;
+      moveSnippet(idx, idx + 1);
     };
     row.querySelector('.sc-edit').onclick = (e) => {
       e.stopPropagation();
@@ -2757,6 +2845,20 @@ function renderSnippetsList() {
     container.appendChild(row);
   });
   hydrateIcons(container);
+}
+
+// v0.19.10: swap two snippets in the saved-commands list and persist the
+// new order. Called by the up/down arrow buttons on each row.
+async function moveSnippet(fromIdx, toIdx) {
+  if (!scDialogSession || !scDialogSession.savedCommands) return;
+  const list = scDialogSession.savedCommands;
+  if (fromIdx < 0 || toIdx < 0 || fromIdx >= list.length || toIdx >= list.length) return;
+  // Simple adjacent swap (that's all the up/down buttons produce) — but
+  // written to handle any index pair in case we ever add drag-to-reorder.
+  const [moved] = list.splice(fromIdx, 1);
+  list.splice(toIdx, 0, moved);
+  await window.api.setSessions(savedSessions);
+  renderSnippetsList();
 }
 
 // Run a snippet: find the active tab for this session, then feed the

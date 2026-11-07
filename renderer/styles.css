@@ -2272,3 +2272,31 @@ kbd {
   border-color: var(--cyan, #00ffff);
   box-shadow: 0 0 0 2px rgba(0, 255, 255, 0.15);
 }
+
+/* v0.19.10: disabled state for up/down move buttons on first/last row */
+.sc-item .sc-actions button:disabled {
+  opacity: 0.25;
+  cursor: not-allowed;
+}
+.sc-item .sc-actions button:disabled:hover {
+  background: transparent;
+  color: var(--text-2, #8892a6);
+  border-color: transparent;
+}
+
+/* --- Platform-specific UI (v0.19.13) ----------------------------------
+   On macOS, hide the RDP toggle in the New Session dialog since mstsc.exe
+   doesn't exist there. Existing RDP sessions stay visible in the sidebar
+   (so a user who syncs sessions.json between Windows and Mac doesn't lose
+   data) — only the "create new RDP session" affordance is suppressed. The
+   RDP badge on existing session rows is also dimmed to signal "won't work
+   here". */
+body.platform-darwin #s-type-rdp,
+body.platform-linux #s-type-rdp {
+  display: none;
+}
+body.platform-darwin .session-type-badge.type-rdp,
+body.platform-linux .session-type-badge.type-rdp {
+  opacity: 0.5;
+  text-decoration: line-through;
+}
