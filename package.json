@@ -1,6 +1,6 @@
 {
   "name": "shellsync",
-  "version": "0.19.15",
+  "version": "0.19.18",
   "description": "ShellSync — A sleek futuristic SSH client with integrated SFTP transfer",
   "main": "main.js",
   "scripts": {

@@ -55,6 +55,8 @@ contextBridge.exposeInMainWorld('api', {
   onSftpProgress: (sessionId, cb) => sub(`sftp:progress:${sessionId}`, cb),
 
   sftpList: (sessionId, remotePath) => ipcRenderer.invoke('sftp:list', { sessionId, remotePath }),
+  // v0.19.18: elevated listing via sudo (called after SFTP returns Permission Denied)
+  sftpSudoList: (sessionId, path, sudoPassword) => ipcRenderer.invoke('sftp:sudoList', { sessionId, path, sudoPassword }),
   sftpExistsBatch: (sessionId, remotePaths) => ipcRenderer.invoke('sftp:exists-batch', { sessionId, remotePaths }),
   sftpMkdir: (sessionId, remotePath) => ipcRenderer.invoke('sftp:mkdir', { sessionId, remotePath }),
   sftpDelete: (sessionId, remotePath, isDirectory) => ipcRenderer.invoke('sftp:delete', { sessionId, remotePath, isDirectory }),

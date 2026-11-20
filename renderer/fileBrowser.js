@@ -141,24 +141,100 @@ async function createFileBrowser(sessionId, container, onStatus) {
     });
   }
 
+  // v0.19.18: sudo mode state. `sudoPassword` is kept in renderer memory
+  // only while this browser instance lives (i.e. while the tab is open) —
+  // never written to disk, never sent to any IPC except the one sudo-list
+  // call that uses it. `sudoMode` makes refreshRemote go through the
+  // elevated path instead of SFTP.
+  let sudoMode = false;
+  let sudoPassword = null;
+
+  async function enterSudoMode() {
+    if (sudoPassword === null) {
+      const pw = await window.showPromptDialog({
+        title: 'Enter sudo mode',
+        message: 'ShellSync will list this folder using `sudo find` through your shell channel. Your password stays in memory for this session only — never saved to disk.',
+        placeholder: 'sudo password',
+        password: true,
+        confirmLabel: 'Elevate',
+      });
+      if (pw === null || pw === '') return;
+      sudoPassword = pw;
+    }
+    sudoMode = true;
+    remoteSide.el.classList.add('sudo-mode');
+    refreshRemote();
+  }
+
+  function exitSudoMode() {
+    sudoMode = false;
+    remoteSide.el.classList.remove('sudo-mode');
+    // Don't clear sudoPassword yet — if the user re-enters sudo mode
+    // later in this session, it's nice not to re-prompt. Cleared when
+    // the browser is torn down (session closed).
+    refreshRemote();
+  }
+
   async function refreshRemote() {
+    if (sudoMode) {
+      // sudo mode: use the elevated find-based listing
+      let p = remotePath;
+      // sudoList needs an absolute path (find bails without one)
+      if (!p || !p.startsWith('/')) p = '/';
+      const r = await window.api.sftpSudoList(sessionId, p, sudoPassword);
+      if (!r.ok) {
+        if (r.authFailed) { sudoPassword = null; } // force re-prompt next time
+        remoteSide.showError(r.error);
+        return;
+      }
+      remotePath = p;
+      remoteItemsCache = r.items;
+      remoteSide.setPath(p);
+      remoteSide.el.setAttribute('data-sudo', 'on');
+      remoteSide.render(r.items, remoteRenderHandlers());
+      return;
+    }
+
+    // Regular SFTP flow
+    remoteSide.el.removeAttribute('data-sudo');
     const r = await window.api.sftpList(sessionId, remotePath);
-    if (!r.ok) { remoteSide.showError(r.error); return; }
+    if (!r.ok) {
+      remoteSide.showError(r.error, {
+        onSudoClick: () => enterSudoMode(),
+      });
+      return;
+    }
     remotePath = r.path;
     remoteItemsCache = r.items;
     remoteSide.setPath(remotePath);
-    remoteSide.render(r.items, {
+    remoteSide.render(r.items, remoteRenderHandlers());
+  }
+
+  // Centralised handler object so sudo mode and regular mode use the
+  // same navigation/open-click logic. Delete/rename/transfer are disabled
+  // in sudo mode (not supported yet — only listing works elevated).
+  function remoteRenderHandlers() {
+    const notInSudo = (op) => {
+      if (sudoMode) {
+        alert(`${op} is not supported in sudo mode yet. Exit sudo mode first (click the Exit button in the SUDO banner), or use the terminal with \`sudo\` for this operation.`);
+        return true;
+      }
+      return false;
+    };
+    return {
       onOpen: (item) => {
         if (item.name === '..') {
           const parts = remotePath.split('/').filter(Boolean);
           parts.pop();
           remotePath = '/' + parts.join('/');
+          if (!remotePath) remotePath = '/';
         } else if (item.isDirectory) {
           remotePath = remotePath.replace(/\/+$/, '') + '/' + item.name;
         } else return;
         refreshRemote();
       },
       onDelete: async (item) => {
+        if (notInSudo('Delete')) return;
         const ok = await window.showConfirmDialog({
           title: 'Delete File', message: `Delete remote "${item.name}"? This cannot be undone.`,
           confirmLabel: 'Delete', danger: true,
@@ -170,6 +246,7 @@ async function createFileBrowser(sessionId, container, onStatus) {
         refreshRemote();
       },
       onRename: async (item) => {
+        if (notInSudo('Rename')) return;
         const nn = await window.showPromptDialog({
           title: 'Rename File', message: `Rename "${item.name}" to:`, defaultValue: item.name,
         });
@@ -181,11 +258,24 @@ async function createFileBrowser(sessionId, container, onStatus) {
         refreshRemote();
       },
       onSendToOther: async (item) => {
+        if (notInSudo('Download')) return;
         if (item.isDirectory) { alert('Folder download not supported yet'); return; }
         const src = remotePath.replace(/\/+$/, '') + '/' + item.name;
         await downloadFiles([{ name: item.name, sourceRemotePath: src, size: item.size }]);
       },
-    });
+    };
+  }
+
+  // Expose the sudo-mode entry/exit so the SUDO banner (added by CSS and
+  // setSudoBannerVisible below) can bind an Exit button to it.
+  // The remote side gets the banner pre-built here; we only need to wire
+  // up the click handler.
+  function wireUpSudoBanner() {
+    const banner = remoteSide.el.querySelector('.fb-sudo-banner');
+    if (banner) {
+      const exitBtn = banner.querySelector('.fb-sudo-exit');
+      if (exitBtn) exitBtn.onclick = () => exitSudoMode();
+    }
   }
 
   // Header buttons
@@ -236,12 +326,18 @@ async function createFileBrowser(sessionId, container, onStatus) {
     if (dropped.length) await uploadFiles(dropped);
   });
 
+  wireUpSudoBanner();
+
   refreshLocal();
   refreshRemote();
 
   return {
     refresh: () => { refreshLocal(); refreshRemote(); },
-    dispose: () => { container.innerHTML = ''; },
+    dispose: () => {
+      // v0.19.18: clear in-memory sudo password when the browser is torn down
+      sudoPassword = null;
+      container.innerHTML = '';
+    },
   };
 }
 
@@ -263,11 +359,76 @@ function makeSide(label, isRemote) {
 
   const list = document.createElement('div'); list.className = 'fb-list';
 
-  el.appendChild(header); el.appendChild(list);
+  el.appendChild(header);
+
+  // v0.19.18: SUDO banner — only visible when the side has `.sudo-mode`
+  // class (toggled by createFileBrowser's enterSudoMode / exitSudoMode).
+  // Shown only on the remote side (sudo mode isn't a local-filesystem thing).
+  if (isRemote) {
+    const banner = document.createElement('div');
+    banner.className = 'fb-sudo-banner';
+    banner.innerHTML = `
+      <span class="fb-sudo-dot">${window.icon('lock', 11)}</span>
+      <span class="fb-sudo-text">SUDO mode — listing via <code>sudo find</code>. Transfers disabled.</span>
+      <button class="fb-sudo-exit" title="Exit sudo mode">Exit</button>
+    `;
+    el.appendChild(banner);
+  }
+
+  el.appendChild(list);
 
   function setPath(p) { pathInput.value = p; }
-  function showError(msg) {
-    list.innerHTML = `<div class="fb-empty" style="color:var(--danger)">Error: ${escapeHtml(msg)}</div>`;
+  // v0.19.16: enrich common SFTP/local errors with a short explanation
+  // v0.19.18: on Permission Denied for remote, add "View with sudo" button
+  // (callback supplied by createFileBrowser — lets the user elevate mid-session)
+  function showError(msg, opts) {
+    const text = String(msg || '');
+    const isPermDenied = /permission denied/i.test(text);
+    const isNoSuchFile = /no such file|not found/i.test(text);
+    opts = opts || {};
+
+    let extra = '';
+    let sudoButtonHtml = '';
+    if (isPermDenied && isRemote) {
+      if (opts.onSudoClick) {
+        sudoButtonHtml = `
+          <div class="fb-sudo-cta">
+            <button class="fb-sudo-btn">${window.icon('lock', 13)} View with sudo</button>
+            <span class="fb-sudo-cta-hint">Prompts for your sudo password — stays in memory for this session only, never saved to disk.</span>
+          </div>`;
+      }
+      extra = `
+        <div class="fb-error-hint">
+          <strong>Having <code>sudo</code> is not the same as being <code>root</code>.</strong>
+          SFTP (the file browser) uses your actual login identity — a regular user
+          who can <em>temporarily</em> elevate with <code>sudo</code> in the terminal.
+          It does <em>not</em> elevate here. A folder you can read via <code>sudo ls</code>
+          in the terminal (left pane) may still be invisible in this panel.
+          <br><br>
+          <strong>Options:</strong>
+          <ul>
+            <li>Click <strong>View with sudo</strong> above to list this folder via <code>sudo find</code></li>
+            <li>Use the terminal with <code>sudo</code> to browse the folder</li>
+            <li>Connect with the account that owns the folder</li>
+            <li>If this is your own server and you accept the risk, log in as <code>root</code> (needs <code>PermitRootLogin</code> enabled in sshd_config)</li>
+          </ul>
+        </div>`;
+    } else if (isNoSuchFile) {
+      extra = `<div class="fb-error-hint">The path doesn't exist on the server. Check for typos, or click <strong>Home</strong> to reset.</div>`;
+    }
+
+    list.innerHTML = `
+      <div class="fb-empty fb-error">
+        <div class="fb-error-line">Error: ${escapeHtml(text)}</div>
+        ${sudoButtonHtml}
+        ${extra}
+      </div>`;
+
+    // Wire up the sudo button if present
+    if (opts.onSudoClick) {
+      const btn = list.querySelector('.fb-sudo-btn');
+      if (btn) btn.onclick = () => opts.onSudoClick();
+    }
   }
   function render(items, handlers) {
     list.innerHTML = '';

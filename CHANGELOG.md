@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Security-relevant changes are marked with **[SECURITY]**.
 
+## [0.19.18] — 2026-11
+
+### Added
+
+- **Sudo mode for the SFTP file browser.** When the remote browser returns "Permission denied" on a folder, you can now click **View with sudo** to list that folder via `sudo find` through the shell channel — same result as running `sudo ls -la /home/other-user` in the terminal, but visible in the GUI. Useful when you have sudo privileges and need to look at folders owned by other users (admin workflows). The password is sent only via `sudo -S` stdin on the exec stream (never through command arguments, so it doesn't appear in `/proc/<pid>/cmdline`), kept in renderer memory for the session only (never written to disk), and cleared when the session closes. A bright orange SUDO banner appears across the remote pane so you can't forget you're in elevated mode. Click **Exit** in the banner to return to normal SFTP.
+
+### Not included in this version
+
+- **File transfers in sudo mode are not yet supported.** Only directory listing works through sudo right now. Upload/download in elevated mode would need to dance through `/tmp` with a sudo mv/cp — buildable but adds significant complexity. For now, if you need to copy files out of a sudo-elevated folder, use the terminal with `sudo cp` to a world-readable staging folder first.
+
+### Changed
+
+- `showPromptDialog` now supports `password: true` to render the input as a masked password field (used by the Sudo mode flow).
+
+## [0.19.17] — 2026-11
+
+### Changed
+
+- **Permission-denied hint now names the core misconception directly.** The "Why?" explanation in the file browser's permission-denied error has been reworded to lead with "Having sudo is not the same as being root." Users running into this error for the first time often say "but I have root access" — meaning they have sudo privileges — and the previous wording didn't call that out clearly. Also softened the "connect as root" option to note it requires `PermitRootLogin` in `sshd_config` and is a security choice.
+
+## [0.19.16] — 2026-11
+
+### Changed
+
+- **File browser errors now explain what's happening.** "Permission denied" from SFTP (the most common confusing case) now includes a short hint explaining that the file browser runs as your SSH login user and doesn't elevate with `sudo`, with options to work around it (use the terminal with `sudo`, connect as a different user, or connect as `root`). "No such file" / "not found" errors get a short hint too. Prevents the "I have sudo, why can't I see this folder?" confusion.
+
 ## [0.19.15] — 2026-11
 
 ### Added

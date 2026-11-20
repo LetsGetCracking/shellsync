@@ -2300,3 +2300,149 @@ body.platform-linux .session-type-badge.type-rdp {
   opacity: 0.5;
   text-decoration: line-through;
 }
+
+/* --- Enriched file browser errors (v0.19.16) --------------------------
+   When SFTP returns "Permission denied" (common when a sudo user tries to
+   browse into another user's /home/), show a short explanation and
+   suggested options below the red error line. */
+.fb-error {
+  padding: 16px 14px !important;
+  text-align: left !important;
+  align-items: flex-start !important;
+  color: var(--text-1, #e8ecf1) !important;
+  font-style: normal !important;
+}
+.fb-error-line {
+  color: var(--danger, #ff3366);
+  font-weight: 600;
+  margin-bottom: 10px;
+  font-size: 12px;
+}
+.fb-error-hint {
+  font-size: 11px;
+  color: var(--text-2, #8892a6);
+  line-height: 1.5;
+  background: rgba(255, 51, 102, 0.04);
+  border: 1px solid rgba(255, 51, 102, 0.15);
+  border-radius: var(--r-sm, 4px);
+  padding: 10px 12px;
+  font-style: normal;
+}
+.fb-error-hint strong {
+  color: var(--text-1, #e8ecf1);
+  font-weight: 600;
+}
+.fb-error-hint code {
+  background: rgba(0, 255, 255, 0.08);
+  color: var(--cyan, #00ffff);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+.fb-error-hint ul {
+  margin: 6px 0 0 0;
+  padding-left: 18px;
+}
+.fb-error-hint li {
+  margin: 3px 0;
+}
+.fb-error-hint em {
+  color: var(--magenta, #ff00ff);
+  font-style: normal;
+}
+
+/* --- Sudo mode banner + styling (v0.19.18) ---------------------------
+   Visible only on the remote side when `.sudo-mode` is applied. Shows a
+   compact orange strip under the path header. Also tints the path input
+   border so users notice they're in elevated mode. */
+.fb-sudo-banner {
+  display: none;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: linear-gradient(90deg, rgba(255, 140, 0, 0.18), rgba(255, 51, 102, 0.12));
+  border-top: 1px solid rgba(255, 140, 0, 0.35);
+  border-bottom: 1px solid rgba(255, 140, 0, 0.35);
+  color: #ffb46b;
+  font-size: 11px;
+  font-weight: 500;
+}
+.fb-side.sudo-mode .fb-sudo-banner { display: flex; }
+.fb-side.sudo-mode .fb-path {
+  border-color: rgba(255, 140, 0, 0.6) !important;
+  color: #ffb46b;
+}
+.fb-sudo-banner .fb-sudo-dot {
+  display: inline-flex;
+  color: #ffb46b;
+  filter: drop-shadow(0 0 4px rgba(255, 140, 0, 0.4));
+}
+.fb-sudo-banner .fb-sudo-text {
+  flex: 1;
+  color: #ffd4a8;
+  font-family: var(--font-ui, inherit);
+}
+.fb-sudo-banner .fb-sudo-text code {
+  background: rgba(0, 0, 0, 0.3);
+  color: #ffb46b;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+.fb-sudo-banner .fb-sudo-exit {
+  background: rgba(255, 140, 0, 0.15);
+  color: #ffb46b;
+  border: 1px solid rgba(255, 140, 0, 0.5);
+  padding: 3px 10px;
+  border-radius: var(--r-sm, 4px);
+  font-size: 11px;
+  cursor: pointer;
+  font-weight: 500;
+  font-family: var(--font-ui, inherit);
+  transition: all 0.15s;
+}
+.fb-sudo-banner .fb-sudo-exit:hover {
+  background: rgba(255, 140, 0, 0.3);
+  border-color: #ffb46b;
+}
+
+/* Sudo CTA button inside the Permission Denied error */
+.fb-sudo-cta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 8px 0 12px;
+  padding: 10px 12px;
+  background: rgba(255, 140, 0, 0.06);
+  border: 1px solid rgba(255, 140, 0, 0.3);
+  border-radius: var(--r-sm, 4px);
+  flex-wrap: wrap;
+}
+.fb-sudo-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(255, 140, 0, 0.15);
+  color: #ffb46b;
+  border: 1px solid rgba(255, 140, 0, 0.5);
+  padding: 6px 12px;
+  border-radius: var(--r-sm, 4px);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  font-family: var(--font-ui, inherit);
+  transition: all 0.15s;
+}
+.fb-sudo-btn:hover {
+  background: rgba(255, 140, 0, 0.3);
+  border-color: #ffb46b;
+  box-shadow: 0 0 10px rgba(255, 140, 0, 0.25);
+}
+.fb-sudo-cta-hint {
+  flex: 1;
+  color: var(--text-2, #8892a6);
+  font-size: 10.5px;
+  font-style: italic;
+}

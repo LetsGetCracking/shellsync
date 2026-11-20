@@ -29,15 +29,18 @@
     return String(s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
   }
 
-  function showPromptDialog({ title = 'Enter a value', message = '', defaultValue = '', placeholder = '', confirmLabel = 'OK' } = {}) {
+  // v0.19.18: added `password: true` option which switches the input to
+  // type="password" so characters are masked. Used by the Sudo mode flow.
+  function showPromptDialog({ title = 'Enter a value', message = '', defaultValue = '', placeholder = '', confirmLabel = 'OK', password = false } = {}) {
     const dlg = ensureOverlay();
     return new Promise((resolve) => {
+      const inputType = password ? 'password' : 'text';
       dlg.innerHTML = `
         <div class="dialog-inner card" style="min-width:420px;max-width:520px;">
           <h3>${esc(title)}</h3>
           ${message ? `<p class="dialog-desc">${esc(message)}</p>` : ''}
           <label style="margin-top:4px;">
-            <input id="gm-prompt-input" type="text" value="${esc(defaultValue)}" placeholder="${esc(placeholder)}" autocomplete="off" />
+            <input id="gm-prompt-input" type="${inputType}" value="${esc(defaultValue)}" placeholder="${esc(placeholder)}" autocomplete="${password ? 'current-password' : 'off'}" />
           </label>
           <div class="dialog-actions">
             <button id="gm-prompt-cancel"><span class="icon-wrap">${window.icon ? window.icon('x', 14) : ''}</span> Cancel</button>
@@ -67,11 +70,15 @@
       dlg.classList.remove('hidden');
       requestAnimationFrame(() => {
         input.focus();
-        // Select base name (before extension) for quick rename, like the transfer dialog does
-        const val = input.value;
-        const dotIdx = val.lastIndexOf('.');
-        if (dotIdx > 0) input.setSelectionRange(0, dotIdx);
-        else input.select();
+        // For password inputs, just focus — don't try to select (nothing
+        // meaningful to pre-select in a blank password field).
+        if (!password) {
+          // Select base name (before extension) for quick rename, like the transfer dialog does
+          const val = input.value;
+          const dotIdx = val.lastIndexOf('.');
+          if (dotIdx > 0) input.setSelectionRange(0, dotIdx);
+          else input.select();
+        }
       });
     });
   }

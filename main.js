@@ -764,6 +764,90 @@ ipcMain.handle('sftp:list', async (_e, { sessionId, remotePath }) => {
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
+// v0.19.18: elevated listing via `sudo find`. Called when the regular SFTP
+// list returns Permission Denied and the user opts into "View with sudo"
+// mode. Flow: open an exec channel, feed the sudo password via stdin
+// (sudo -S), run `find` with structured tab-separated output that's safer
+// to parse than `ls`. Marker line `__SHELLSYNC_DONE__` lets us distinguish
+// a successful list from a bail-out (sudo auth failure, nonexistent path).
+//
+// Password is sent ONLY through the exec stream's stdin — never embedded
+// in the command string, where it'd show up in /proc/<pid>/cmdline on the
+// server for other users to see.
+//
+// Scope: listing only. File transfers within sudo mode come in a later
+// version — upload-via-/tmp + sudo mv, download-via-sudo-cp-to-/tmp dance
+// are both buildable but add complexity.
+ipcMain.handle('sftp:sudoList', (_e, { sessionId, path, sudoPassword }) => {
+  return new Promise((resolve) => {
+    const s = sessions.get(sessionId);
+    if (!s) { resolve({ ok: false, error: 'Session not connected.' }); return; }
+
+    // Shell-escape the path using single-quote wrapping. Any embedded
+    // single quotes become '\''  (end quote, literal quote, re-open quote).
+    const quotedPath = "'" + String(path || '/').replace(/'/g, "'\\''") + "'";
+
+    // Fields: %P=basename, %y=type (d/f/l/b/c/p/s/U), %s=size, %T@=mtime epoch
+    // -maxdepth 1 -mindepth 1: direct children only, skip the path itself
+    // The echo marker is the sentinel — if we see it, find ran to completion.
+    const cmd =
+      `sudo -S -p '' -- find ${quotedPath} -maxdepth 1 -mindepth 1 ` +
+      `-printf '%P\\t%y\\t%s\\t%T@\\n' 2>/dev/null && echo __SHELLSYNC_DONE__`;
+
+    s.client.exec(cmd, (err, stream) => {
+      if (err) { resolve({ ok: false, error: err.message }); return; }
+      let stdout = '', stderr = '';
+      // Send the password on stdin, then close that side.
+      try {
+        stream.stdin.write(String(sudoPassword || '') + '\n');
+        stream.stdin.end();
+      } catch (e) {
+        resolve({ ok: false, error: 'Failed to send password: ' + e.message });
+        return;
+      }
+      stream.on('data', (d) => { stdout += d.toString('utf8'); });
+      stream.stderr.on('data', (d) => { stderr += d.toString('utf8'); });
+      stream.on('close', () => {
+        // Sudo auth failure patterns — be strict about these so we can
+        // prompt for a fresh password instead of showing a cryptic error.
+        if (/incorrect password|sudo: a password is required|authentication failure|sudo: \d+ incorrect password attempts/i.test(stderr)) {
+          resolve({ ok: false, error: 'Sudo password incorrect.', authFailed: true });
+          return;
+        }
+        if (/not in the sudoers|not allowed to run sudo/i.test(stderr)) {
+          resolve({ ok: false, error: 'This account is not in the sudoers file.' });
+          return;
+        }
+        if (!stdout.includes('__SHELLSYNC_DONE__')) {
+          const msg = (stderr.trim() || stdout.trim() || 'Unknown error').slice(0, 300);
+          resolve({ ok: false, error: 'Elevated listing failed: ' + msg });
+          return;
+        }
+
+        // Parse tab-separated lines
+        const items = [];
+        const lines = stdout.replace('__SHELLSYNC_DONE__', '').split('\n');
+        for (const line of lines) {
+          if (!line) continue;
+          const parts = line.split('\t');
+          if (parts.length < 4) continue;
+          const [name, type, size, mtimeEpoch] = parts;
+          if (!name || name === '.' || name === '..') continue;
+          items.push({
+            name,
+            isDirectory: type === 'd',
+            isSymlink: type === 'l',
+            size: parseInt(size, 10) || 0,
+            mtime: Math.round(parseFloat(mtimeEpoch) * 1000),
+          });
+        }
+        items.sort((a, b) => (b.isDirectory - a.isDirectory) || a.name.localeCompare(b.name));
+        resolve({ ok: true, items, elevated: true });
+      });
+    });
+  });
+});
+
 // Batch existence check — returns which of these remote paths exist
 ipcMain.handle('sftp:exists-batch', async (_e, { sessionId, remotePaths }) => {
   try {
