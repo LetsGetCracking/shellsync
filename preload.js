@@ -83,6 +83,20 @@ contextBridge.exposeInMainWorld('api', {
   // instead of a hardcoded string that goes stale. Reads from
   // Electron's app.getVersion() which reads package.json at startup.
   getAppVersion: () => ipcRenderer.invoke('app:get-version'),
+
+  // v0.19.19: auto-updater controls + event subscriptions.
+  // Events fire on their own lifecycle: checking → available/not-available
+  // → progress (if downloading) → downloaded. Error can fire at any point.
+  updaterStatus: () => ipcRenderer.invoke('updater:status'),
+  updaterCheck: () => ipcRenderer.invoke('updater:check'),
+  updaterInstall: () => ipcRenderer.invoke('updater:install'),
+  updaterSkipVersion: (version) => ipcRenderer.invoke('updater:skipVersion', { version }),
+  onUpdaterChecking: (cb) => sub('updater:checking', cb),
+  onUpdaterAvailable: (cb) => sub('updater:available', cb),
+  onUpdaterNotAvailable: (cb) => sub('updater:not-available', cb),
+  onUpdaterProgress: (cb) => sub('updater:progress', cb),
+  onUpdaterDownloaded: (cb) => sub('updater:downloaded', cb),
+  onUpdaterError: (cb) => sub('updater:error', cb),
 });
 
 function sub(channel, cb) {

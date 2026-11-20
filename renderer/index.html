@@ -513,6 +513,19 @@
         <div class="kh-empty">No trusted hosts yet.</div>
       </div>
 
+      <!-- v0.19.19: Auto-update checking. Toggle lets paranoid users turn off
+           the startup check; "Check now" lets everyone poll on demand. -->
+      <h4>Updates</h4>
+      <label><input type="checkbox" id="opt-auto-updates" /> Check for updates on startup</label>
+      <p class="dialog-desc" style="margin: 4px 0 8px;">
+        ShellSync will quietly check GitHub for newer releases and download them
+        in the background. You'll be prompted before anything is installed.
+      </p>
+      <div style="display:flex; gap:8px; align-items:center; margin-bottom:12px;">
+        <button id="updates-check-now"><span data-icon="refresh"></span> Check for updates now</button>
+        <span id="updates-check-status" style="color: var(--text-3); font-size: 12px;"></span>
+      </div>
+
       <h4>Keyboard Shortcuts</h4>
       <ul class="shortcuts">
         <li><kbd>Ctrl</kbd> + <kbd>T</kbd> — New session</li>

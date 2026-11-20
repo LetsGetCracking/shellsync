@@ -2446,3 +2446,88 @@ body.platform-linux .session-type-badge.type-rdp {
   font-size: 10.5px;
   font-style: italic;
 }
+
+/* --- v0.19.19: Auto-update banner --------------------------------------
+ * Fixed bottom-right toast. Keeps itself well out of the way of the
+ * status bar and file browser toggle. Semi-transparent panel with the
+ * accent cyan border so it feels native, not alarming. */
+.updater-banner {
+  position: fixed;
+  right: 20px;
+  bottom: 48px; /* clear the status bar */
+  width: 340px;
+  background: var(--panel);
+  backdrop-filter: var(--panel-blur);
+  -webkit-backdrop-filter: var(--panel-blur);
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6), 0 0 16px rgba(0, 229, 255, 0.15);
+  padding: 12px 14px;
+  z-index: 1500;
+  color: var(--text-1);
+  font-size: 13px;
+  animation: ub-slide-in 0.28s ease-out;
+}
+.updater-banner.hidden { display: none; }
+@keyframes ub-slide-in {
+  from { opacity: 0; transform: translateY(16px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.updater-banner .ub-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.updater-banner .ub-icon {
+  display: inline-flex;
+  color: var(--accent);
+}
+.updater-banner .ub-title {
+  font-weight: 600;
+  flex: 1;
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-size: 11px;
+}
+.updater-banner .ub-close {
+  background: transparent;
+  border: none;
+  color: var(--text-3);
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+  padding: 0 4px;
+}
+.updater-banner .ub-close:hover { color: var(--text-1); }
+.updater-banner .ub-msg {
+  margin-bottom: 8px;
+  color: var(--text-1);
+  line-height: 1.4;
+}
+.updater-banner .ub-progress {
+  height: 6px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 3px;
+  overflow: hidden;
+  margin-bottom: 10px;
+}
+.updater-banner .ub-progress.hidden { display: none; }
+.updater-banner .ub-progress-bar {
+  height: 100%;
+  background: var(--accent);
+  box-shadow: 0 0 8px var(--accent);
+  width: 0%;
+  transition: width 0.25s ease;
+}
+.updater-banner .ub-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+.updater-banner .ub-actions button {
+  font-size: 12px;
+  padding: 6px 12px;
+}
+.updater-banner .ub-install.hidden { display: none; }

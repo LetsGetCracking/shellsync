@@ -12,6 +12,11 @@ const DEFAULT_SETTINGS = {
   // v0.19.1: minutes of inactivity before App Login re-locks. 0 = never lock.
   // Only takes effect when App Login is enabled. Default 15 minutes.
   autoLockMinutes: 15,
+  // v0.19.19: auto-update checking. Default on. If the user clicks "Skip
+  // this version" on a specific update toast, skippedVersion remembers it
+  // so we don't nag again until there's a newer version.
+  autoCheckUpdates: true,
+  skippedVersion: '',
   theme: {
     background: '#0A0E17', foreground: '#E8ECF1',
     cursor: '#00FFFF', selectionBackground: '#4B0068',
@@ -1516,6 +1521,9 @@ function loadSettingsIntoUI() {
   // v0.19.1: auto-lock timeout
   const autoLockField = document.getElementById('opt-autolock');
   if (autoLockField) autoLockField.value = Number(settings.autoLockMinutes) || 0;
+  // v0.19.19: auto-update checkbox
+  const upd = document.getElementById('opt-auto-updates');
+  if (upd) upd.checked = settings.autoCheckUpdates !== false;
   const t = settings.theme;
   document.getElementById('c-background').value = t.background;
   document.getElementById('c-foreground').value = t.foreground;
@@ -1542,6 +1550,9 @@ function applyUIToSettings() {
     // Re-arm the timer immediately so the new value takes effect without a restart
     refreshAutoLockAfterSettingChange();
   }
+  // v0.19.19: auto-update toggle
+  const upd = document.getElementById('opt-auto-updates');
+  if (upd) settings.autoCheckUpdates = !!upd.checked;
   const t = settings.theme;
   t.background = document.getElementById('c-background').value;
   t.foreground = document.getElementById('c-foreground').value;
@@ -2959,3 +2970,169 @@ function bindSavedCommandsDialogs() {
 // Call the binding once the DOM is ready — it's safe to call here since
 // init() runs after DOMContentLoaded in this app.
 bindSavedCommandsDialogs();
+
+// --- Auto-updater UI (v0.19.19) ----------------------------------------
+// Subscribes to the main-process updater events and renders a small toast
+// banner in the bottom-right corner. Three key states shown to the user:
+//   1. "Update available" — downloading now (progress bar)
+//   2. "Update downloaded" — click Restart to install, or Skip this version
+//   3. Error — logged to console, silent in UI (updates are opportunistic)
+
+let _updaterBannerEl = null;
+let _updaterSkippedVersionCache = ''; // from settings on load
+
+function updaterBanner() {
+  if (_updaterBannerEl) return _updaterBannerEl;
+  const el = document.createElement('div');
+  el.id = 'updater-banner';
+  el.className = 'updater-banner hidden';
+  el.innerHTML = `
+    <div class="ub-head">
+      <span class="ub-icon" data-icon="download"></span>
+      <span class="ub-title">Update available</span>
+      <button class="ub-close" title="Dismiss">&times;</button>
+    </div>
+    <div class="ub-body">
+      <div class="ub-msg"></div>
+      <div class="ub-progress hidden"><div class="ub-progress-bar"></div></div>
+      <div class="ub-actions">
+        <button class="ub-skip">Skip this version</button>
+        <button class="ub-install btn-primary hidden"><span data-icon="refresh"></span> Restart &amp; install</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(el);
+  hydrateIcons(el);
+  el.querySelector('.ub-close').onclick = () => hideUpdaterBanner();
+  _updaterBannerEl = el;
+  return el;
+}
+
+function showUpdaterBanner() {
+  const el = updaterBanner();
+  el.classList.remove('hidden');
+}
+function hideUpdaterBanner() {
+  const el = updaterBanner();
+  el.classList.add('hidden');
+}
+
+function setUpdaterState({ title, message, progress, showInstall, version }) {
+  const el = updaterBanner();
+  if (title) el.querySelector('.ub-title').textContent = title;
+  if (message != null) el.querySelector('.ub-msg').textContent = message;
+  const progEl = el.querySelector('.ub-progress');
+  const barEl = el.querySelector('.ub-progress-bar');
+  if (progress != null) {
+    progEl.classList.remove('hidden');
+    barEl.style.width = Math.max(0, Math.min(100, progress)) + '%';
+  } else {
+    progEl.classList.add('hidden');
+  }
+  const installBtn = el.querySelector('.ub-install');
+  if (showInstall) {
+    installBtn.classList.remove('hidden');
+    installBtn.onclick = async () => {
+      installBtn.disabled = true;
+      await window.api.updaterInstall();
+    };
+  } else {
+    installBtn.classList.add('hidden');
+  }
+  const skipBtn = el.querySelector('.ub-skip');
+  skipBtn.onclick = async () => {
+    if (version) {
+      await window.api.updaterSkipVersion(version);
+      _updaterSkippedVersionCache = version;
+    }
+    hideUpdaterBanner();
+  };
+}
+
+function bindUpdater() {
+  // If the renderer has no updater API (older preload / dev mode without
+  // the bridge), do nothing silently.
+  if (!window.api.updaterStatus) return;
+
+  // Load the current skipped version from settings so we can filter
+  _updaterSkippedVersionCache = (settings && settings.skippedVersion) || '';
+
+  // v0.19.19: wire up "Check for updates now" button in Settings dialog.
+  const checkBtn = document.getElementById('updates-check-now');
+  const checkStatus = document.getElementById('updates-check-status');
+  if (checkBtn && checkStatus) {
+    checkBtn.onclick = async () => {
+      checkBtn.disabled = true;
+      checkStatus.textContent = 'Checking…';
+      try {
+        const r = await window.api.updaterCheck();
+        if (r && r.error) {
+          checkStatus.textContent = 'Error: ' + r.error;
+        } else if (r && r.devMode) {
+          checkStatus.textContent = 'Only available in packaged builds.';
+        } else {
+          checkStatus.textContent = 'Checked. Any update will appear as a banner.';
+        }
+      } catch (e) {
+        checkStatus.textContent = 'Error: ' + e.message;
+      } finally {
+        setTimeout(() => { checkBtn.disabled = false; }, 2000);
+      }
+    };
+  }
+
+  window.api.onUpdaterChecking(() => {
+    console.log('[Updater] Checking for updates...');
+  });
+
+  window.api.onUpdaterAvailable((info) => {
+    console.log('[Updater] Update available:', info);
+    if (info && info.version && info.version === _updaterSkippedVersionCache) {
+      console.log('[Updater] Skipping — user dismissed this version');
+      return;
+    }
+    setUpdaterState({
+      title: 'Downloading update…',
+      message: `Version ${info.version} is downloading in the background.`,
+      progress: 0,
+      showInstall: false,
+      version: info.version,
+    });
+    showUpdaterBanner();
+  });
+
+  window.api.onUpdaterNotAvailable((info) => {
+    console.log('[Updater] Up to date:', info);
+  });
+
+  window.api.onUpdaterProgress((p) => {
+    setUpdaterState({
+      message: `Downloading… ${p.percent}%`,
+      progress: p.percent,
+    });
+  });
+
+  window.api.onUpdaterDownloaded((info) => {
+    console.log('[Updater] Update downloaded:', info);
+    setUpdaterState({
+      title: 'Update ready to install',
+      message: `Version ${info.version} is ready. Restart ShellSync to apply.`,
+      progress: null,
+      showInstall: true,
+      version: info.version,
+    });
+    showUpdaterBanner();
+  });
+
+  window.api.onUpdaterError((err) => {
+    console.warn('[Updater] Error:', err && err.message);
+    // Silent in the UI — update failures shouldn't interrupt work. User
+    // can still check manually from Settings if they care.
+  });
+}
+
+// Call bindUpdater on load, after the first settings read. Defer until the
+// init IIFE above has finished so `settings` is populated.
+setTimeout(() => {
+  try { bindUpdater(); } catch (e) { console.error('[Updater] bind failed:', e); }
+}, 500);

@@ -297,6 +297,135 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
+// --- Auto-updater (v0.19.19) --------------------------------------------
+// Uses electron-updater against the GitHub Releases provider configured in
+// package.json's build.publish block. On launch, if the user hasn't opted
+// out via settings.autoCheckUpdates=false, we check once and let the
+// renderer know via IPC events. Download is automatic, install is NOT —
+// the user clicks a toast button to restart and apply.
+//
+// Dev mode (not packaged) skips everything — autoUpdater needs a signed
+// app package and update manifest, neither exists during `npm start`.
+let _autoUpdater = null;
+function getAutoUpdater() {
+  if (_autoUpdater) return _autoUpdater;
+  try {
+    _autoUpdater = require('electron-updater').autoUpdater;
+    // Don't let it auto-download without us knowing; we want to let the
+    // renderer decide via setting whether to proceed.
+    _autoUpdater.autoDownload = true;       // download in background
+    _autoUpdater.autoInstallOnAppQuit = false; // but user must click Restart
+    _autoUpdater.allowPrerelease = false;
+    _autoUpdater.logger = console;
+    return _autoUpdater;
+  } catch (e) {
+    console.warn('[AutoUpdate] electron-updater not available:', e.message);
+    return null;
+  }
+}
+
+function broadcastToRenderer(channel, payload) {
+  for (const w of BrowserWindow.getAllWindows()) {
+    try { if (!w.isDestroyed()) w.webContents.send(channel, payload); } catch {}
+  }
+}
+
+function setupAutoUpdater() {
+  if (!app.isPackaged) {
+    console.log('[AutoUpdate] Skipped — running unpackaged (dev mode)');
+    return;
+  }
+  const au = getAutoUpdater();
+  if (!au) return;
+
+  au.on('checking-for-update', () => broadcastToRenderer('updater:checking'));
+  au.on('update-available', (info) => broadcastToRenderer('updater:available', {
+    version: info.version,
+    releaseDate: info.releaseDate,
+    releaseName: info.releaseName || null,
+  }));
+  au.on('update-not-available', (info) => broadcastToRenderer('updater:not-available', {
+    currentVersion: app.getVersion(),
+    latestChecked: info && info.version,
+  }));
+  au.on('download-progress', (p) => broadcastToRenderer('updater:progress', {
+    percent: Math.round(p.percent || 0),
+    bytesPerSecond: p.bytesPerSecond,
+    transferred: p.transferred,
+    total: p.total,
+  }));
+  au.on('update-downloaded', (info) => broadcastToRenderer('updater:downloaded', {
+    version: info.version,
+    releaseDate: info.releaseDate,
+  }));
+  au.on('error', (err) => broadcastToRenderer('updater:error', {
+    message: (err && err.message) || String(err),
+  }));
+
+  // Initial check — wait a few seconds so the window is fully up and
+  // the user doesn't see update toasts before the main UI renders.
+  setTimeout(() => {
+    const cfg = readJson(settingsFile(), {}) || {};
+    if (cfg.autoCheckUpdates === false) {
+      console.log('[AutoUpdate] Skipped — user disabled check in Settings');
+      return;
+    }
+    // Pass the skipped version so we can suppress the "available" event
+    // for a version the user explicitly dismissed.
+    au._shellsyncSkippedVersion = cfg.skippedVersion || '';
+    au.checkForUpdates().catch((err) => {
+      console.warn('[AutoUpdate] Initial check failed:', err.message);
+    });
+  }, 4000);
+}
+
+// IPC: manual check (triggered by a "Check for updates" button in Settings)
+ipcMain.handle('updater:check', async () => {
+  if (!app.isPackaged) return { ok: false, error: 'Dev mode — auto-update disabled' };
+  const au = getAutoUpdater();
+  if (!au) return { ok: false, error: 'Updater module not available' };
+  try {
+    const r = await au.checkForUpdates();
+    return { ok: true, updateInfo: r && r.updateInfo ? {
+      version: r.updateInfo.version,
+      releaseDate: r.updateInfo.releaseDate,
+    } : null };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+// IPC: quit and install downloaded update
+ipcMain.handle('updater:install', () => {
+  const au = getAutoUpdater();
+  if (!au) return { ok: false, error: 'Updater module not available' };
+  // isSilent=false, isForceRunAfter=true — show the normal installer UI
+  // and relaunch ShellSync after it completes.
+  try {
+    au.quitAndInstall(false, true);
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+// IPC: persist "skip this version" so startup checks don't nag again
+ipcMain.handle('updater:skipVersion', (_e, { version }) => {
+  const s = readJson(settingsFile(), {}) || {};
+  s.skippedVersion = String(version || '');
+  writeJson(settingsFile(), s);
+  return { ok: true };
+});
+
+// IPC: expose current running version + packaged state for the Settings UI
+ipcMain.handle('updater:status', () => ({
+  currentVersion: app.getVersion(),
+  packaged: app.isPackaged,
+}));
+
+// Kick off the updater once the window is ready
+app.whenReady().then(setupAutoUpdater);
+
 // --- IPC: settings & saved sessions -------------------------------------
 ipcMain.handle('settings:get', () => readJson(settingsFile(), null));
 ipcMain.handle('settings:set', (_e, data) => {

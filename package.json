@@ -1,6 +1,6 @@
 {
   "name": "shellsync",
-  "version": "0.19.18",
+  "version": "0.19.19",
   "description": "ShellSync — A sleek futuristic SSH client with integrated SFTP transfer",
   "main": "main.js",
   "scripts": {
@@ -23,7 +23,8 @@
     "@xterm/xterm": "^5.5.0",
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/addon-web-links": "^0.11.0",
-    "@xterm/addon-search": "^0.15.0"
+    "@xterm/addon-search": "^0.15.0",
+    "electron-updater": "^6.3.9"
   },
   "build": {
     "appId": "com.example.shellsync",
@@ -32,6 +33,13 @@
       "main.js", "preload.js", "renderer/**/*", "build/**/*", "node_modules/**/*", "package.json",
       "!**/*.md", "!**/{.git,.github,.vscode,test,tests,__tests__,docs,example,examples}/**",
       "!**/*.map"
+    ],
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "LetsGetCracking",
+        "repo": "shellsync"
+      }
     ],
     "win": {
       "target": [{ "target": "nsis", "arch": ["x64"] }],
