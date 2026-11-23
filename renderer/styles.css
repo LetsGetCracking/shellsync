@@ -181,16 +181,112 @@ body::before {
   color: white;
 }
 
-/* ============ APP GRID (3 floating cards) ============ */
+/* ============ APP GRID (3 floating cards) ============
+ * v0.19.20: columns are now CSS variables so sidebar-collapse and
+ * file-panel resize can change them live. Defaults match the old
+ * fixed layout (260 / 1fr / 340). */
 #app {
   display: grid;
-  grid-template-columns: 260px 1fr 340px;
+  --col-sidebar: 260px;
+  --col-file-panel: 340px;
+  grid-template-columns: var(--col-sidebar) 1fr var(--col-file-panel);
   gap: 12px;
   padding: 12px;
   height: calc(100vh - var(--tb-height));
 }
-#app.no-file-panel { grid-template-columns: 260px 1fr 0; gap: 12px 0; }
+#app.no-file-panel {
+  grid-template-columns: var(--col-sidebar) 1fr 0;
+  gap: 12px 0;
+}
 #app.no-file-panel #file-panel { display: none; }
+
+/* v0.19.20: Sidebar collapsed state — full sidebar card hides,
+   a 44px strip takes its place. */
+#app.sidebar-collapsed {
+  grid-template-columns: 44px 1fr var(--col-file-panel);
+}
+#app.sidebar-collapsed.no-file-panel {
+  grid-template-columns: 44px 1fr 0;
+}
+/* v0.19.21: defensive !important — prior release had both the sidebar
+   AND the strip rendering at once because display:none wasn't sticking
+   under all cascade conditions. JS also toggles .hidden on each element
+   directly as a belt-and-suspenders fix. */
+#app.sidebar-collapsed > #sidebar { display: none !important; }
+#app:not(.sidebar-collapsed) > #sidebar-collapsed-strip { display: none !important; }
+#sidebar.hidden, #sidebar-collapsed-strip.hidden { display: none !important; }
+
+#sidebar-collapsed-strip {
+  background: var(--panel-bg);
+  backdrop-filter: var(--panel-blur);
+  -webkit-backdrop-filter: var(--panel-blur);
+  border: 1px solid var(--border-1);
+  border-radius: var(--r-lg);
+  padding: 10px 6px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+#sidebar-collapsed-strip.hidden { display: none; }
+#sidebar-collapsed-strip .scs-label {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  font-size: 10px;
+  letter-spacing: 3px;
+  color: var(--text-3);
+  text-transform: uppercase;
+  font-weight: 600;
+  margin-top: 6px;
+}
+
+/* v0.19.20: Resize handle on the left edge of the file panel.
+   Invisible by default, cyan glow on hover/drag. */
+#file-panel { position: relative; }
+#fp-resize-handle {
+  position: absolute;
+  left: -6px;
+  top: 0;
+  bottom: 0;
+  width: 10px;
+  cursor: ew-resize;
+  z-index: 10;
+  background: transparent;
+  transition: background 0.15s;
+}
+#fp-resize-handle:hover,
+#fp-resize-handle.dragging {
+  background: linear-gradient(90deg, transparent 0%, var(--cyan) 45%, var(--cyan) 55%, transparent 100%);
+  box-shadow: 0 0 10px var(--cyan-glow);
+}
+body.fp-resizing { cursor: ew-resize; user-select: none; }
+body.fp-resizing * { cursor: ew-resize !important; }
+
+/* v0.19.24: Standalone sidebar-collapse button in the top-right corner
+   of the sidebar card. Separated from the Sessions action-button cluster
+   so it reads as a window-chrome affordance. */
+#sidebar-collapse-btn {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 5;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-2);
+  border: 1px solid var(--border-2);
+  width: 26px; height: 26px;
+  border-radius: 6px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s;
+}
+#sidebar-collapse-btn:hover {
+  color: var(--cyan);
+  border-color: var(--cyan);
+  background: rgba(0, 229, 212, 0.08);
+  box-shadow: 0 0 8px var(--cyan-glow-soft);
+}
 
 /* ============ SIDEBAR CARD ============ */
 #sidebar {

@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Security-relevant changes are marked with **[SECURITY]**.
 
+## [0.19.24] — 2026-11
+
+### Changed
+
+- **Sidebar collapse button moved to the top-right corner of the sidebar card** (out of the Sessions action-button cluster), with a clear `<` chevron icon. Everything else about sidebar collapse is unchanged — same 44px strip, same expand button on the strip.
+
+### Added
+
+- **Reset display button** in Settings → Layout. Restores the sidebar to visible, the file-transfer panel to visible, and the file-panel width to its startup default of 340px. One-click way back to the stock layout.
+
+### Reverted
+
+- **v0.19.22 & v0.19.23 experimental sidebar behavior rolled back.** Those releases tried to fully hide the sidebar and move the expand toggle to the title bar. Behavior is back to v0.19.21: sidebar collapses to the familiar 44px strip with its own expand button.
+
+## [0.19.21] — 2026-11
+
+### Fixed
+
+- **Sidebar collapse broke the whole layout.** v0.19.20's sidebar collapse relied on CSS cascade alone to hide the full sidebar card when the collapsed strip was shown. Under some render conditions both were visible at once, leaving 4 children trying to fit in 3 grid columns — the sidebar got squished to ~20px with vertically-wrapped text, and the file-transfer panel bounced into the center. Now the renderer toggles `.hidden` on each element directly, and the CSS uses `!important` as a safety net.
+
+## [0.19.20] — 2026-11
+
+### Added
+
+- **Collapsible left sidebar.** Click the new `«` button in the SESSIONS header (or press `Ctrl+\`) to collapse the sidebar to a thin 44px strip, freeing up horizontal space for the terminal. A matching `»` button on the strip expands it back. Great on 13" laptop screens where every pixel of terminal width helps. The collapsed state persists across launches.
+- **Resizable file-transfer panel.** The right-hand FILE TRANSFER panel can now be resized by dragging its left edge. Drag left to make it wider (useful for long remote filenames and deep folder trees); drag right to give the terminal more room. Min 280px, max 600px. The chosen width persists across launches. The existing `Ctrl+B` show/hide toggle still works unchanged.
+
+### Fixed
+
+- **Updater error overflow in Settings.** The `Check for updates now` button in Settings used to dump the entire HTTP error (headers, stack trace, the lot) into the status label when something went wrong, taking over the whole Settings panel. Status messages are now truncated to one line and translated into friendly English (`No updates available (release metadata missing)` instead of a 500-character error dump).
+
 ## [0.19.19] — 2026-11
 
 ### Added

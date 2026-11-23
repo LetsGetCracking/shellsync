@@ -120,6 +120,15 @@
   <div id="app">
     <!-- =========== LEFT CARD: SESSIONS =========== -->
     <aside id="sidebar" class="card">
+      <!-- v0.19.24: Collapse button moved out of the Sessions action-button
+           cluster and into the top-right corner of the sidebar card itself.
+           Clear "<" chevron so the direction is obvious. The thin 44px
+           strip + its own expand button are still how the sidebar comes
+           back, unchanged from v0.19.21. -->
+      <button id="sidebar-collapse-btn" title="Collapse sidebar (Ctrl+\)">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>
+      </button>
+
       <div class="brand">
         <div class="brand-logo" id="brand-logo"></div>
         <div class="brand-text">
@@ -149,6 +158,14 @@
       </div>
     </aside>
 
+    <!-- v0.19.20: Thin icon strip shown when sidebar is collapsed.
+         Gives a single affordance to expand it again so the sidebar
+         never fully disappears without a visible way back. -->
+    <div id="sidebar-collapsed-strip" class="hidden">
+      <button class="icon-btn" id="sidebar-expand-btn" title="Expand sidebar (Ctrl+\)" data-icon="chevron-right"></button>
+      <div class="scs-label">SESSIONS</div>
+    </div>
+
     <!-- =========== CENTER CARD: TERMINAL =========== -->
     <main id="main" class="card">
       <div id="tab-bar"></div>
@@ -176,6 +193,10 @@
 
     <!-- =========== RIGHT CARD: FILE PANEL =========== -->
     <aside id="file-panel" class="card">
+      <!-- v0.19.20: Draggable resize handle on the left edge.
+           Drag left → wider file panel (more room for long filenames).
+           Drag right → narrower (more terminal width). Clamped [280, 600]. -->
+      <div id="fp-resize-handle" title="Drag to resize"></div>
       <div class="fp-tab">
         <span data-icon="folder"></span>
         <span class="fp-title" id="fp-title">File Transfer</span>
@@ -513,6 +534,19 @@
         <div class="kh-empty">No trusted hosts yet.</div>
       </div>
 
+      <!-- v0.19.24: Layout — one-click restore of sidebar/file-panel to
+           their startup defaults in case the user hid or shrank them and
+           wants to get back to a known-good state. -->
+      <h4>Layout</h4>
+      <p class="dialog-desc" style="margin: 4px 0 8px;">
+        Restores the sidebar and file-transfer panel to their startup
+        positions. Useful if things look squished or something is hidden.
+      </p>
+      <div style="display:flex; gap:8px; align-items:center; margin-bottom:14px;">
+        <button id="layout-reset-btn"><span data-icon="refresh"></span> Reset display</button>
+        <span id="layout-reset-status" style="color: var(--text-3); font-size: 12px;"></span>
+      </div>
+
       <!-- v0.19.19: Auto-update checking. Toggle lets paranoid users turn off
            the startup check; "Check now" lets everyone poll on demand. -->
       <h4>Updates</h4>
@@ -535,6 +569,7 @@
         <li><kbd>Ctrl</kbd> + <kbd>D</kbd> — Duplicate tab</li>
         <li><kbd>Ctrl</kbd> + <kbd>F</kbd> — Find in terminal</li>
         <li><kbd>Ctrl</kbd> + <kbd>B</kbd> — Toggle file panel</li>
+        <li><kbd>Ctrl</kbd> + <kbd>\</kbd> — Collapse / expand sidebar</li>
         <li><kbd>Ctrl</kbd> + <kbd>+</kbd> / <kbd>−</kbd> — Global font size</li>
         <li><kbd>Ctrl</kbd> + scroll — Zoom active terminal only</li>
       </ul>

@@ -17,6 +17,12 @@ const DEFAULT_SETTINGS = {
   // so we don't nag again until there's a newer version.
   autoCheckUpdates: true,
   skippedVersion: '',
+  // v0.19.20: layout — sidebar collapse state + file-panel width.
+  // sidebarCollapsed: when true, left sidebar shrinks to a 44px icon strip.
+  // filePanelWidth: pixel width of the right file-transfer panel. Clamped
+  // to [280, 600] at apply time so the user can't drag it off-screen.
+  sidebarCollapsed: false,
+  filePanelWidth: 340,
   theme: {
     background: '#0A0E17', foreground: '#E8ECF1',
     cursor: '#00FFFF', selectionBackground: '#4B0068',
@@ -288,6 +294,9 @@ try {
     }
   } catch (err) { console.error('[ShellSync] heal-status check failed:', err); }
   applyFilePanelVisibility();
+  // v0.19.20: apply persisted layout state before first render
+  applySidebarCollapsed();
+  applyFilePanelWidth();
   renderSessionTree();
   bindDialogs();
   bindSearchBar();
@@ -939,6 +948,130 @@ function bindCreateFolderDialog() {
 function bindFilePanel() {
   document.getElementById('fp-collapse-btn').onclick = () => setFilePanelVisible(false);
   document.getElementById('fp-expand-btn').onclick = () => setFilePanelVisible(true);
+  // v0.19.20: file panel resize drag + sidebar collapse
+  bindFilePanelResize();
+  bindSidebarCollapse();
+  // v0.19.24: Reset-display button in Settings → Layout
+  const resetBtn = document.getElementById('layout-reset-btn');
+  const resetStatus = document.getElementById('layout-reset-status');
+  if (resetBtn) {
+    resetBtn.onclick = () => {
+      resetLayoutToDefaults();
+      if (resetStatus) {
+        resetStatus.textContent = 'Layout reset.';
+        setTimeout(() => { resetStatus.textContent = ''; }, 2500);
+      }
+    };
+  }
+}
+
+// v0.19.24: Reset the layout to startup defaults — sidebar visible,
+// file panel visible, file panel back to 340px. Called from Settings.
+function resetLayoutToDefaults() {
+  settings.sidebarCollapsed = false;
+  settings.filePanelVisible = true;
+  settings.filePanelWidth = 340;
+  window.api.setSettings(settings);
+  applySidebarCollapsed();
+  applyFilePanelVisibility();
+  applyFilePanelWidth();
+  const t = tabs.get(activeTabId);
+  if (t) requestAnimationFrame(() => {
+    t.fit.fit();
+    window.api.sshResize(t.sessionId, t.term.cols, t.term.rows);
+  });
+}
+
+// v0.19.20: Sidebar collapse — toggles between full sidebar and a thin
+// vertical strip. Persisted in settings so it survives restart.
+function bindSidebarCollapse() {
+  const collapseBtn = document.getElementById('sidebar-collapse-btn');
+  const expandBtn = document.getElementById('sidebar-expand-btn');
+  if (collapseBtn) collapseBtn.onclick = () => setSidebarCollapsed(true);
+  if (expandBtn) expandBtn.onclick = () => setSidebarCollapsed(false);
+}
+function setSidebarCollapsed(collapsed) {
+  settings.sidebarCollapsed = !!collapsed;
+  window.api.setSettings(settings);
+  applySidebarCollapsed();
+  // Refit active terminal — the center column just changed width.
+  const t = tabs.get(activeTabId);
+  if (t) requestAnimationFrame(() => {
+    t.fit.fit();
+    window.api.sshResize(t.sessionId, t.term.cols, t.term.rows);
+  });
+}
+function applySidebarCollapsed() {
+  const app = document.getElementById('app');
+  const sidebar = document.getElementById('sidebar');
+  const strip = document.getElementById('sidebar-collapsed-strip');
+  // v0.19.21: toggle .hidden DIRECTLY on each element too, not only on #app.
+  // The cascade-only approach in v0.19.20 left the sidebar visible under
+  // some conditions, which squished the whole layout when the grid tried
+  // to fit 4 children into 3 columns.
+  if (settings.sidebarCollapsed) {
+    app.classList.add('sidebar-collapsed');
+    if (sidebar) sidebar.classList.add('hidden');
+    if (strip) strip.classList.remove('hidden');
+  } else {
+    app.classList.remove('sidebar-collapsed');
+    if (sidebar) sidebar.classList.remove('hidden');
+    if (strip) strip.classList.add('hidden');
+  }
+}
+
+// v0.19.20: File panel resize — drag the left-edge handle to change
+// the --col-file-panel CSS var; persist the final width on mouseup.
+function bindFilePanelResize() {
+  const handle = document.getElementById('fp-resize-handle');
+  if (!handle) return;
+  const app = document.getElementById('app');
+  let dragging = false;
+  let startX = 0;
+  let startWidth = 340;
+  const MIN_W = 280;
+  const MAX_W = 600;
+
+  handle.addEventListener('mousedown', (e) => {
+    dragging = true;
+    startX = e.clientX;
+    startWidth = Number(settings.filePanelWidth) || 340;
+    handle.classList.add('dragging');
+    document.body.classList.add('fp-resizing');
+    e.preventDefault();
+  });
+  window.addEventListener('mousemove', (e) => {
+    if (!dragging) return;
+    // Dragging left (negative dx) should MAKE the file panel wider,
+    // so we subtract dx from the width (not add).
+    const dx = e.clientX - startX;
+    let w = startWidth - dx;
+    if (w < MIN_W) w = MIN_W;
+    if (w > MAX_W) w = MAX_W;
+    app.style.setProperty('--col-file-panel', w + 'px');
+    // Live-update settings (don't persist on every pixel — do that on mouseup)
+    settings.filePanelWidth = w;
+  });
+  window.addEventListener('mouseup', () => {
+    if (!dragging) return;
+    dragging = false;
+    handle.classList.remove('dragging');
+    document.body.classList.remove('fp-resizing');
+    window.api.setSettings(settings);
+    // Refit terminal to new center-column width
+    const t = tabs.get(activeTabId);
+    if (t) requestAnimationFrame(() => {
+      t.fit.fit();
+      window.api.sshResize(t.sessionId, t.term.cols, t.term.rows);
+    });
+  });
+}
+function applyFilePanelWidth() {
+  const app = document.getElementById('app');
+  let w = Number(settings.filePanelWidth) || 340;
+  if (w < 280) w = 280;
+  if (w > 600) w = 600;
+  app.style.setProperty('--col-file-panel', w + 'px');
 }
 function setFilePanelVisible(visible) {
   settings.filePanelVisible = visible;
@@ -1612,6 +1745,10 @@ function bindGlobalShortcuts() {
       }
       if (e.key === 'b' || e.key === 'B') {
         e.preventDefault(); setFilePanelVisible(!settings.filePanelVisible); return;
+      }
+      // v0.19.20: Ctrl+\ toggles the left sidebar collapse state
+      if (e.key === '\\') {
+        e.preventDefault(); setSidebarCollapsed(!settings.sidebarCollapsed); return;
       }
       if (inSidebarFilter || inFilePanel || inSearchBar) return;
       if (e.key === 't' || e.key === 'T') { e.preventDefault(); openSessionDialog(null); return; }
@@ -3066,15 +3203,9 @@ function bindUpdater() {
       checkStatus.textContent = 'Checking…';
       try {
         const r = await window.api.updaterCheck();
-        if (r && r.error) {
-          checkStatus.textContent = 'Error: ' + r.error;
-        } else if (r && r.devMode) {
-          checkStatus.textContent = 'Only available in packaged builds.';
-        } else {
-          checkStatus.textContent = 'Checked. Any update will appear as a banner.';
-        }
+        checkStatus.textContent = friendlyUpdaterMessage(r);
       } catch (e) {
-        checkStatus.textContent = 'Error: ' + e.message;
+        checkStatus.textContent = friendlyUpdaterMessage({ ok: false, error: e.message });
       } finally {
         setTimeout(() => { checkBtn.disabled = false; }, 2000);
       }
@@ -3136,3 +3267,27 @@ function bindUpdater() {
 setTimeout(() => {
   try { bindUpdater(); } catch (e) { console.error('[Updater] bind failed:', e); }
 }, 500);
+
+// v0.19.20: Translate electron-updater's noisy, multi-line error dumps into
+// a single friendly line. Previously a 404 response dumped its entire HTTP
+// headers blob into Settings, which took over the whole panel.
+function friendlyUpdaterMessage(r) {
+  if (!r) return 'No response from updater.';
+  if (r.ok && r.updateInfo && r.updateInfo.version) {
+    return `Update available: v${r.updateInfo.version}. Downloading…`;
+  }
+  if (r.ok) return 'You are on the latest version.';
+  const err = String(r.error || '').toLowerCase();
+  if (err.includes('dev mode') || err.includes('disabled')) {
+    return 'Only available in packaged builds.';
+  }
+  if (err.includes('latest.yml') || err.includes('cannot find') || err.includes('404')) {
+    return 'No updates available (release metadata missing).';
+  }
+  if (err.includes('enotfound') || err.includes('getaddrinfo') || err.includes('network')) {
+    return 'No network — check your connection.';
+  }
+  // Fallback: truncate to one short line so the UI never blows up.
+  const first = String(r.error || 'Unknown error').split('\n')[0];
+  return first.length > 120 ? first.slice(0, 117) + '…' : first;
+}
