@@ -2627,3 +2627,422 @@ body.platform-linux .session-type-badge.type-rdp {
   padding: 6px 12px;
 }
 .updater-banner .ub-install.hidden { display: none; }
+
+/* --- v0.19.26: SSH Key Manager ---------------------------------------- */
+.keys-toolbar {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+  align-items: center;
+}
+.keys-toolbar #keys-refresh-btn {
+  margin-left: auto;
+  width: 32px; height: 32px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.keys-list {
+  max-height: 420px;
+  overflow-y: auto;
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-md);
+  padding: 4px;
+  min-height: 80px;
+}
+.keys-empty {
+  padding: 32px 16px;
+  text-align: center;
+  color: var(--text-3);
+  font-size: 13px;
+}
+.key-row {
+  display: grid;
+  grid-template-columns: 24px 1fr auto;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--r-md);
+  align-items: start;
+  border-bottom: 1px solid var(--border-2);
+}
+.key-row:last-child { border-bottom: none; }
+.key-row:hover { background: rgba(255, 255, 255, 0.02); }
+.key-row .key-icon {
+  color: var(--cyan);
+  display: inline-flex;
+  padding-top: 2px;
+}
+.key-row .key-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.key-row .key-name {
+  font-weight: 600;
+  color: var(--text-1);
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+.key-row .key-type {
+  font-size: 11px;
+  color: var(--cyan);
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+.key-row .key-fp {
+  font-size: 10px;
+  color: var(--text-3);
+  font-family: var(--font-mono);
+  word-break: break-all;
+}
+.key-row .key-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.key-row .key-actions button {
+  width: 28px; height: 28px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border-2);
+  background: transparent;
+  color: var(--text-2);
+  border-radius: var(--r-md);
+  cursor: pointer;
+}
+.key-row .key-actions button:hover {
+  color: var(--cyan);
+  border-color: var(--cyan);
+}
+.key-row .key-actions button.danger-outline:hover {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.dialog-error {
+  color: var(--danger);
+  font-size: 12px;
+  padding: 6px 0;
+}
+.dialog-error.hidden { display: none; }
+.dialog-status {
+  padding: 8px 10px;
+  border-radius: var(--r-md);
+  font-size: 12px;
+  margin-top: 8px;
+}
+.dialog-status.hidden { display: none; }
+.dialog-status.ok {
+  background: rgba(74, 222, 128, 0.1);
+  color: var(--success);
+  border: 1px solid var(--success);
+}
+.dialog-status.err {
+  background: rgba(255, 83, 112, 0.1);
+  color: var(--danger);
+  border: 1px solid var(--danger);
+}
+
+.key-picker { display: flex; flex-direction: column; }
+
+/* --- v0.19.27: Broadcast input mode ----------------------------------- */
+/* Tabs that are members of the broadcast group get a bright pink pulsing
+   border + a small radio icon. Impossible to miss at a glance. */
+.tab.broadcast {
+  border: 1px solid var(--pink, #FF2E88);
+  box-shadow: 0 0 10px rgba(255, 46, 136, 0.5), inset 0 0 8px rgba(255, 46, 136, 0.15);
+  animation: broadcast-pulse 1.8s ease-in-out infinite;
+  position: relative;
+}
+.tab.broadcast::before {
+  content: '📡';
+  margin-right: 4px;
+  font-size: 10px;
+}
+@keyframes broadcast-pulse {
+  0%, 100% { box-shadow: 0 0 10px rgba(255, 46, 136, 0.4), inset 0 0 8px rgba(255, 46, 136, 0.1); }
+  50%      { box-shadow: 0 0 18px rgba(255, 46, 136, 0.75), inset 0 0 12px rgba(255, 46, 136, 0.25); }
+}
+
+/* Status-bar broadcast pill — bright pink, prominent, click-to-clear. */
+#broadcast-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 14px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: rgba(255, 46, 136, 0.18);
+  border: 1px solid var(--pink, #FF2E88);
+  color: var(--pink, #FF2E88);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  cursor: pointer;
+  user-select: none;
+  animation: broadcast-pulse-pill 1.8s ease-in-out infinite;
+}
+#broadcast-indicator.hidden { display: none; }
+#broadcast-indicator .bi-icon { font-size: 13px; }
+#broadcast-indicator .bi-stop {
+  margin-left: 4px;
+  padding-left: 8px;
+  border-left: 1px solid rgba(255, 46, 136, 0.5);
+  font-weight: 800;
+}
+#broadcast-indicator:hover {
+  background: rgba(255, 46, 136, 0.3);
+}
+@keyframes broadcast-pulse-pill {
+  0%, 100% { box-shadow: 0 0 6px rgba(255, 46, 136, 0.3); }
+  50%      { box-shadow: 0 0 14px rgba(255, 46, 136, 0.6); }
+}
+
+/* Warning banner above the active terminal when the ACTIVE tab is
+   broadcasting. v0.19.29: positioned absolute at the top of the workspace
+   (which is itself position:absolute inset:0 — the terminal pane sits over
+   it). Banner gets z-index 5 so it draws above the terminal. When banner
+   is present, the .workspace gets .has-broadcast-bar which shifts the
+   .pane-term down by the banner's height so the terminal isn't hidden. */
+.broadcast-warning-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 36px;
+  z-index: 5;
+  background: linear-gradient(90deg, rgba(255, 46, 136, 0.28) 0%, rgba(255, 46, 136, 0.15) 100%);
+  border-bottom: 2px solid var(--pink, #FF2E88);
+  color: var(--text-1);
+  padding: 0 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  font-weight: 500;
+  box-shadow: 0 2px 8px rgba(255, 46, 136, 0.25);
+}
+.workspace.has-broadcast-bar .pane-term { top: 36px; }
+.broadcast-warning-bar .bwb-icon { font-size: 14px; flex-shrink: 0; }
+.broadcast-warning-bar .bwb-text { flex: 1; }
+.broadcast-warning-bar .bwb-text strong { color: var(--pink, #FF2E88); }
+.broadcast-warning-bar .bwb-label {
+  color: var(--text-1);
+  flex-shrink: 0;
+  font-weight: 500;
+}
+.broadcast-warning-bar .bwb-label strong { color: var(--pink, #FF2E88); font-weight: 700; }
+/* v0.19.30: quick-send command input. Flex-grows to fill available space
+   between the label and the buttons. Styled to look input-y but match
+   the broadcast banner's pink theme. */
+.broadcast-warning-bar .bwb-cmd {
+  flex: 1;
+  min-width: 100px;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 46, 136, 0.5);
+  color: var(--text-1);
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.broadcast-warning-bar .bwb-cmd:focus {
+  border-color: var(--pink, #FF2E88);
+  box-shadow: 0 0 6px rgba(255, 46, 136, 0.5);
+  background: rgba(0, 0, 0, 0.5);
+}
+.broadcast-warning-bar .bwb-cmd::placeholder {
+  color: rgba(255, 255, 255, 0.4);
+  font-style: italic;
+}
+.broadcast-warning-bar .bwb-send {
+  padding: 4px 10px;
+  background: transparent;
+  color: var(--text-1);
+  border: 1px solid rgba(255, 46, 136, 0.6);
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  cursor: pointer;
+}
+.broadcast-warning-bar .bwb-send:hover {
+  background: rgba(255, 46, 136, 0.25);
+  border-color: var(--pink, #FF2E88);
+}
+/* v0.19.31: "Send password" button — same shape as Send, lock icon prefix,
+   warm amber accent so it reads as a sensitive-action button, not an
+   ordinary one. */
+.broadcast-warning-bar .bwb-pw {
+  padding: 4px 10px;
+  background: transparent;
+  color: var(--text-1);
+  border: 1px solid rgba(255, 176, 32, 0.6);
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  cursor: pointer;
+}
+.broadcast-warning-bar .bwb-pw:hover {
+  background: rgba(255, 176, 32, 0.18);
+  border-color: var(--warning, #FFB020);
+  color: var(--warning, #FFB020);
+}
+.broadcast-warning-bar .bwb-stop {
+  padding: 4px 12px;
+  background: var(--pink, #FF2E88);
+  color: #0A0B14;
+  border: none;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  cursor: pointer;
+}
+.broadcast-warning-bar .bwb-stop:hover { filter: brightness(1.15); }
+
+/* --- v0.19.28: Command Palette ---------------------------------------- */
+#palette-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  z-index: 3000;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 100px;
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+}
+#palette-overlay.hidden { display: none; }
+
+#palette-card {
+  width: 640px;
+  max-width: 90vw;
+  max-height: 60vh;
+  background: var(--panel-bg);
+  backdrop-filter: var(--panel-blur);
+  -webkit-backdrop-filter: var(--panel-blur);
+  border: 1px solid var(--cyan);
+  border-radius: var(--r-lg);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.6), 0 0 24px var(--cyan-glow-soft);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+#palette-input-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border-2);
+}
+#palette-input-row .palette-prompt {
+  color: var(--cyan);
+  font-family: var(--font-mono);
+  font-size: 18px;
+  font-weight: 700;
+}
+#palette-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text-1);
+  font-size: 15px;
+  font-family: var(--font-ui);
+}
+#palette-input::placeholder { color: var(--text-3); }
+#palette-input-row .palette-hint {
+  font-size: 11px;
+  color: var(--text-3);
+}
+#palette-input-row .palette-hint kbd {
+  display: inline-block;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border-2);
+  border-radius: 3px;
+  padding: 1px 5px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  margin: 0 2px;
+  color: var(--text-2);
+}
+
+#palette-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px;
+}
+.palette-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-1);
+}
+.palette-item:hover { background: rgba(255, 255, 255, 0.04); }
+.palette-item.active {
+  background: rgba(0, 229, 212, 0.14);
+  border-left: 2px solid var(--cyan);
+  padding-left: 10px;
+}
+.palette-item .pi-icon {
+  color: var(--cyan);
+  display: inline-flex;
+  width: 18px;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.palette-item .pi-label {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.palette-item .pi-label b {
+  color: var(--cyan);
+  font-weight: 700;
+}
+.palette-item .pi-sub {
+  color: var(--text-3);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  flex-shrink: 0;
+}
+.palette-item .pi-kind {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border-2);
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 10px;
+  color: var(--text-3);
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+.palette-item .pi-kind.action { color: var(--pink, #FF2E88); border-color: rgba(255, 46, 136, 0.4); }
+.palette-item .pi-kind.session { color: var(--cyan); border-color: rgba(0, 229, 212, 0.4); }
+
+.palette-empty {
+  padding: 32px 16px;
+  text-align: center;
+  color: var(--text-3);
+  font-size: 13px;
+}

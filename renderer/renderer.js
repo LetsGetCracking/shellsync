@@ -305,6 +305,14 @@ try {
   bindContextMenu();
   bindFilePanel();
   bindMigrationDialog();
+  // v0.19.26: SSH Keys manager
+  bindKeyManager();
+  // v0.19.27: Broadcast input UI (status-bar pill click handler)
+  bindBroadcastUI();
+  // v0.19.28: Command palette (Ctrl+Shift+P)
+  bindPalette();
+  // v0.19.31: Broadcast "Send password" modal
+  bindBroadcastPasswordDialog();
   bindHostVerify();
   bindKnownHostsUi();
   bindAppLoginUi();
@@ -1186,6 +1194,14 @@ async function openSessionDialog(existing) {
     const useAgent = document.getElementById('s-use-agent');
     useAgent.checked = existing ? !!existing.useAgent : false;
     applyUseAgentDisable();
+    // v0.19.26: populate the key picker from managed keys, select the
+    // matching one if the session's current keyPath points to a managed key.
+    populateSessionKeyPicker(existing ? existing.keyPath : '');
+    // v0.19.25: Jump host dropdown — list every other SSH session as a
+    // possible jump. Exclude the session being edited (prevents loops) and
+    // exclude RDP sessions (no SSH tunnel to forward through).
+    populateJumpHostDropdown(existing ? existing.id : null,
+      existing ? (existing.jumpSessionId || '') : '');
   } else {
     // RDP-specific fields
     document.getElementById('s-rdp-domain').value = existing ? (existing.domain || '') : '';
@@ -1214,6 +1230,43 @@ async function openSessionDialog(existing) {
     applyRdpDisplayModeVisibility();
   }
   document.getElementById('session-dialog').classList.remove('hidden');
+}
+
+// v0.19.25: Populate the jump host dropdown. Lists every SSH session EXCEPT
+// the one being edited (prevents A → A loops), RDP sessions (no SSH tunnel),
+// and sessions whose jump chain would loop back to the current one.
+function populateJumpHostDropdown(editingId, currentValue) {
+  const sel = document.getElementById('s-jump');
+  if (!sel) return;
+  sel.innerHTML = '<option value="">— None (direct connection) —</option>';
+
+  // Build a set of sessions that cannot be chosen as a jump because picking
+  // them would create a loop. A session is excluded if following its own
+  // jump chain eventually arrives back at editingId.
+  const sessionsById = new Map(savedSessions.map(s => [s.id, s]));
+  function loopsBackTo(startId, targetId, depth) {
+    if (depth > 10) return true; // paranoid: treat >10 hops as a loop
+    const s = sessionsById.get(startId);
+    if (!s || !s.jumpSessionId) return false;
+    if (s.jumpSessionId === targetId) return true;
+    return loopsBackTo(s.jumpSessionId, targetId, depth + 1);
+  }
+
+  const candidates = savedSessions
+    .filter(s => (s.type || 'ssh') === 'ssh')
+    .filter(s => s.id !== editingId)
+    .filter(s => !editingId || !loopsBackTo(s.id, editingId, 0))
+    .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+
+  for (const s of candidates) {
+    const opt = document.createElement('option');
+    opt.value = s.id;
+    const folder = s.folder ? `${s.folder} / ` : '';
+    opt.textContent = `${folder}${s.name}  (${s.username || '?'}@${s.host}:${s.port || 22})`;
+    sel.appendChild(opt);
+  }
+  sel.value = currentValue || '';
+  refreshCustomSelect('s-jump');
 }
 
 // Swaps the dialog between SSH and RDP field groups. Only called for NEW
@@ -1428,11 +1481,14 @@ function bindDialogs() {
       // SSH — original logic path
       const useAgent = document.getElementById('s-use-agent').checked;
       const passValue = document.getElementById('s-pass').value;
+      // v0.19.25: jump host — empty string means no jump
+      const jumpSessionId = (document.getElementById('s-jump').value || '').trim();
       data = {
         type: 'ssh',
         name, folder, host, port, username, tags,
         keyPath: useAgent ? '' : document.getElementById('s-key').value.trim(),
         useAgent,
+        jumpSessionId,
       };
       // Password intent: three cases
       //   - user clicked Clear button:   clearPassword: true
@@ -1763,6 +1819,19 @@ function bindGlobalShortcuts() {
     if (e.ctrlKey && e.shiftKey && e.key === 'Tab') {
       e.preventDefault(); cycleTab(-1); return;
     }
+    // v0.19.27: Ctrl+Shift+B toggles the current active tab into the broadcast group
+    if (e.ctrlKey && e.shiftKey && (e.key === 'B' || e.key === 'b')) {
+      e.preventDefault();
+      const t = tabs.get(activeTabId);
+      if (t) toggleBroadcastMember(t.sessionId);
+      return;
+    }
+    // v0.19.28: Ctrl+Shift+P opens the command palette
+    if (e.ctrlKey && e.shiftKey && (e.key === 'P' || e.key === 'p')) {
+      e.preventDefault();
+      openPalette();
+      return;
+    }
   });
 }
 
@@ -1832,12 +1901,24 @@ function openSession(session, opts = {}) {
   tabEl.querySelector('.close').onclick = (e) => { e.stopPropagation(); closeTab(tabId); };
   tabEl.oncontextmenu = (e) => {
     e.preventDefault();
-    showContextMenu(e.clientX, e.clientY, [
+    // v0.19.27: broadcast toggle for this tab
+    const inGroup = broadcastGroup.has(sessionId);
+    const items = [
       { label: 'Duplicate tab', icon: 'copy', onClick: () => duplicateTab(tabId) },
       { label: 'Reconnect', icon: 'rotate-cw', onClick: () => reconnectTab(tabId) },
       { sep: true },
-      { label: 'Close tab', icon: 'x', onClick: () => closeTab(tabId) },
-    ]);
+      {
+        label: inGroup ? 'Remove from broadcast' : 'Add to broadcast (Ctrl+Shift+B)',
+        icon: inGroup ? 'x' : 'radio',
+        onClick: () => toggleBroadcastMember(sessionId),
+      },
+    ];
+    if (broadcastGroup.size > 0) {
+      items.push({ label: 'Stop broadcasting (all)', icon: 'x', onClick: () => clearBroadcastGroup() });
+    }
+    items.push({ sep: true });
+    items.push({ label: 'Close tab', icon: 'x', onClick: () => closeTab(tabId) });
+    showContextMenu(e.clientX, e.clientY, items);
   };
   document.getElementById('tab-bar').appendChild(tabEl);
 
@@ -2299,6 +2380,8 @@ function connectTab(entry, session) {
     host: session.host, port: session.port,
     username: session.username,
     keyPath: session.keyPath || null,
+    // v0.19.25: pass the jump host id so main can chain the connection
+    jumpSessionId: session.jumpSessionId || null,
     cols: term.cols, rows: term.rows,
   }).then(res => {
     if (!res.ok) {
@@ -2351,7 +2434,16 @@ function connectTab(entry, session) {
     // After two reconnects: three times. And so on. That was the "typing
     // duplicates every character" bug — bash saw each keystroke N times.
     const dataSub = term.onData(d => {
-      window.api.sshWrite(sessionId, d);
+      // v0.19.27: Broadcast — if THIS tab is a member of the broadcast
+      // group, mirror every keystroke to every live member. Otherwise
+      // just write to this session's own stream.
+      if (broadcastGroup.has(sessionId) && broadcastGroup.size > 1) {
+        for (const peerId of broadcastGroup) {
+          try { window.api.sshWrite(peerId, d); } catch {}
+        }
+      } else {
+        window.api.sshWrite(sessionId, d);
+      }
     });
     cleanup.push(() => dataSub.dispose());
     const resizeSub = term.onResize(({ cols, rows }) => window.api.sshResize(sessionId, cols, rows));
@@ -2485,6 +2577,8 @@ function setActiveTab(tabId) {
   else stopStatsPolling();
   updateConnectionStatus();
   renderSessionTree();
+  // v0.19.27: re-render broadcast warning bar for the new active tab
+  updateBroadcastWarningBar();
 }
 
 function closeTab(tabId) {
@@ -2499,6 +2593,12 @@ function closeTab(tabId) {
   t.workspace.remove();
   t.tabEl.remove();
   tabs.delete(tabId);
+  // v0.19.27: drop the closed tab from the broadcast group so we don't
+  // try to write to a dead stream
+  if (broadcastGroup.has(t.sessionId)) {
+    broadcastGroup.delete(t.sessionId);
+    updateBroadcastUI();
+  }
   renderSessionTree();
   if (activeTabId === tabId) {
     const next = tabs.keys().next().value;
@@ -3290,4 +3390,709 @@ function friendlyUpdaterMessage(r) {
   // Fallback: truncate to one short line so the UI never blows up.
   const first = String(r.error || 'Unknown error').split('\n')[0];
   return first.length > 120 ? first.slice(0, 117) + '…' : first;
+}
+
+// --- SSH Key Manager UI (v0.19.26) ---------------------------------------
+// Wires up: Settings → Open SSH Keys button, the keys dialog toolbar,
+// generate/import/delete/copy/deploy per row, and the per-session key
+// picker in the session dialog.
+
+function bindKeyManager() {
+  const openBtn = document.getElementById('open-keys-mgr-btn');
+  if (openBtn) openBtn.onclick = () => openKeysDialog();
+
+  const closeBtn = document.getElementById('keys-close-btn');
+  if (closeBtn) closeBtn.onclick = () => document.getElementById('keys-dialog').classList.add('hidden');
+
+  const refreshBtn = document.getElementById('keys-refresh-btn');
+  if (refreshBtn) refreshBtn.onclick = () => refreshKeysList();
+
+  const genBtn = document.getElementById('keys-generate-btn');
+  if (genBtn) genBtn.onclick = () => openKeysNewDialog('generate');
+  const impBtn = document.getElementById('keys-import-btn');
+  if (impBtn) impBtn.onclick = () => openKeysNewDialog('import');
+
+  // New-key dialog buttons
+  const newCancel = document.getElementById('keys-new-cancel-btn');
+  if (newCancel) newCancel.onclick = () => document.getElementById('keys-new-dialog').classList.add('hidden');
+  const newOk = document.getElementById('keys-new-ok-btn');
+  if (newOk) newOk.onclick = () => submitKeysNewDialog();
+
+  // Deploy dialog buttons
+  const depCancel = document.getElementById('keys-deploy-cancel-btn');
+  if (depCancel) depCancel.onclick = () => document.getElementById('keys-deploy-dialog').classList.add('hidden');
+  const depOk = document.getElementById('keys-deploy-ok-btn');
+  if (depOk) depOk.onclick = () => submitDeployDialog();
+}
+
+async function openKeysDialog() {
+  document.getElementById('keys-dialog').classList.remove('hidden');
+  await refreshKeysList();
+}
+
+let _keysCache = []; // cached list for picker population
+async function refreshKeysList() {
+  const list = document.getElementById('keys-list');
+  if (!list) return;
+  list.innerHTML = '<div class="keys-empty">Loading...</div>';
+  try {
+    const keys = await window.api.keysList();
+    _keysCache = keys || [];
+    renderKeysList(keys || []);
+  } catch (e) {
+    list.innerHTML = `<div class="keys-empty">Failed to list keys: ${e.message}</div>`;
+  }
+}
+
+function renderKeysList(keys) {
+  const list = document.getElementById('keys-list');
+  if (!list) return;
+  if (!keys.length) {
+    list.innerHTML = '<div class="keys-empty">No keys yet. Generate one or import an existing key to get started.</div>';
+    return;
+  }
+  list.innerHTML = '';
+  for (const k of keys) {
+    const row = document.createElement('div');
+    row.className = 'key-row';
+    row.innerHTML = `
+      <span class="key-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"/><path d="M10.85 12.15 19 4"/><path d="m18 5 2 2"/><path d="m15 8 2 2"/></svg></span>
+      <div class="key-meta">
+        <div class="key-name"></div>
+        <div class="key-type"></div>
+        <div class="key-fp"></div>
+      </div>
+      <div class="key-actions">
+        <button class="k-copy" title="Copy public key">⎘</button>
+        <button class="k-deploy" title="Deploy to server...">↑</button>
+        <button class="k-delete danger-outline" title="Delete">✕</button>
+      </div>
+    `;
+    row.querySelector('.key-name').textContent = k.name;
+    row.querySelector('.key-type').textContent = k.type || 'unknown';
+    row.querySelector('.key-fp').textContent = k.fingerprint || '';
+    row.querySelector('.k-copy').onclick = () => copyKeyPublic(k.name);
+    row.querySelector('.k-deploy').onclick = () => openDeployDialog(k.name);
+    row.querySelector('.k-delete').onclick = () => deleteKey(k.name);
+    list.appendChild(row);
+  }
+}
+
+async function copyKeyPublic(name) {
+  const r = await window.api.keysGetPublic(name);
+  if (!r.ok) { alert('Could not read public key: ' + r.error); return; }
+  try {
+    await navigator.clipboard.writeText(r.publicKey);
+    // Light, transient feedback — reuse the toast if one exists; otherwise
+    // just a quick row flash.
+    flashToast(`Public key for ${name} copied to clipboard.`);
+  } catch (e) {
+    alert('Could not copy to clipboard: ' + e.message + '\n\nHere it is:\n\n' + r.publicKey);
+  }
+}
+
+function flashToast(msg) {
+  // Reuses the generic toast if one exists in the app; otherwise alert.
+  if (typeof showToast === 'function') { showToast(msg, null, 2800); return; }
+  // Lightweight inline fallback
+  let t = document.getElementById('_keys_toast');
+  if (!t) {
+    t = document.createElement('div');
+    t.id = '_keys_toast';
+    t.style.cssText = 'position:fixed;bottom:60px;right:20px;background:var(--panel-bg);border:1px solid var(--cyan);color:var(--text-1);padding:10px 14px;border-radius:8px;z-index:2000;font-size:13px;box-shadow:0 0 12px var(--cyan-glow-soft);';
+    document.body.appendChild(t);
+  }
+  t.textContent = msg;
+  t.style.display = 'block';
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => { t.style.display = 'none'; }, 2800);
+}
+
+async function deleteKey(name) {
+  if (!confirm(`Delete key "${name}"?\n\nThis removes the private and public key files from ShellSync. Sessions that reference this key will fail to authenticate until you point them at another key or set a password.`)) return;
+  const r = await window.api.keysDelete(name);
+  if (!r.ok) { alert('Delete failed: ' + r.error); return; }
+  await refreshKeysList();
+}
+
+// New-key dialog: used for both Generate and Import flows. mode=='generate'
+// creates a fresh ed25519; mode=='import' kicks off the file-picker flow.
+let _keysNewMode = 'generate';
+function openKeysNewDialog(mode) {
+  _keysNewMode = mode;
+  const dlg = document.getElementById('keys-new-dialog');
+  const title = document.getElementById('keys-new-title');
+  const nameEl = document.getElementById('keys-new-name');
+  const commentRow = document.getElementById('keys-new-comment-row');
+  const err = document.getElementById('keys-new-error');
+  if (mode === 'import') {
+    title.textContent = 'Import existing key';
+    nameEl.placeholder = 'my-imported-key';
+    if (commentRow) commentRow.style.display = 'none';
+  } else {
+    title.textContent = 'Generate ed25519 key';
+    nameEl.placeholder = 'my-ed25519';
+    if (commentRow) commentRow.style.display = '';
+  }
+  nameEl.value = '';
+  document.getElementById('keys-new-comment').value = '';
+  err.classList.add('hidden');
+  err.textContent = '';
+  dlg.classList.remove('hidden');
+  setTimeout(() => nameEl.focus(), 50);
+}
+
+async function submitKeysNewDialog() {
+  const nameEl = document.getElementById('keys-new-name');
+  const err = document.getElementById('keys-new-error');
+  const name = (nameEl.value || '').trim();
+  if (!name) {
+    err.textContent = 'Please enter a key name.';
+    err.classList.remove('hidden');
+    return;
+  }
+  const comment = (document.getElementById('keys-new-comment').value || '').trim();
+  const okBtn = document.getElementById('keys-new-ok-btn');
+  okBtn.disabled = true;
+  err.classList.add('hidden');
+  try {
+    let r;
+    if (_keysNewMode === 'import') {
+      r = await window.api.keysImport(name);
+      // User canceled the OS file picker — close the dialog quietly
+      if (r && r.canceled) {
+        document.getElementById('keys-new-dialog').classList.add('hidden');
+        return;
+      }
+    } else {
+      r = await window.api.keysGenerate(name, comment || null);
+    }
+    if (!r.ok) {
+      err.textContent = r.error || 'Unknown error.';
+      err.classList.remove('hidden');
+      return;
+    }
+    document.getElementById('keys-new-dialog').classList.add('hidden');
+    await refreshKeysList();
+    flashToast(`Key "${name}" ${_keysNewMode === 'import' ? 'imported' : 'generated'}.`);
+  } finally {
+    okBtn.disabled = false;
+  }
+}
+
+// --- Deploy dialog -------------------------------------------------------
+let _deployKeyName = '';
+function openDeployDialog(name) {
+  _deployKeyName = name;
+  document.getElementById('keys-deploy-key').value = name;
+  document.getElementById('keys-deploy-pass').value = '';
+  const target = document.getElementById('keys-deploy-target');
+  target.innerHTML = '';
+  // Populate with every SSH session
+  const sshSessions = savedSessions
+    .filter(s => (s.type || 'ssh') === 'ssh')
+    .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  if (!sshSessions.length) {
+    const opt = document.createElement('option');
+    opt.value = '';
+    opt.textContent = '(no SSH sessions saved)';
+    target.appendChild(opt);
+  } else {
+    for (const s of sshSessions) {
+      const opt = document.createElement('option');
+      opt.value = s.id;
+      const folder = s.folder ? `${s.folder} / ` : '';
+      opt.textContent = `${folder}${s.name}  (${s.username || '?'}@${s.host}:${s.port || 22})`;
+      target.appendChild(opt);
+    }
+  }
+  const status = document.getElementById('keys-deploy-status');
+  status.className = 'dialog-status hidden';
+  status.textContent = '';
+  document.getElementById('keys-deploy-dialog').classList.remove('hidden');
+}
+
+async function submitDeployDialog() {
+  const target = document.getElementById('keys-deploy-target').value;
+  if (!target) {
+    const status = document.getElementById('keys-deploy-status');
+    status.className = 'dialog-status err';
+    status.textContent = 'Pick a target session first.';
+    return;
+  }
+  const password = document.getElementById('keys-deploy-pass').value;
+  const status = document.getElementById('keys-deploy-status');
+  status.className = 'dialog-status';
+  status.textContent = 'Connecting and deploying...';
+  status.classList.remove('hidden');
+  const okBtn = document.getElementById('keys-deploy-ok-btn');
+  okBtn.disabled = true;
+  try {
+    const r = await window.api.keysDeploy(_deployKeyName, target, password || null);
+    if (!r.ok) {
+      status.className = 'dialog-status err';
+      status.textContent = 'Failed: ' + r.error;
+      return;
+    }
+    status.className = 'dialog-status ok';
+    status.textContent = r.alreadyPresent
+      ? 'Already present on the target — nothing to do.'
+      : 'Deployed! Public key appended to ~/.ssh/authorized_keys.';
+  } catch (e) {
+    status.className = 'dialog-status err';
+    status.textContent = 'Error: ' + e.message;
+  } finally {
+    okBtn.disabled = false;
+  }
+}
+
+// --- Per-session key picker ---------------------------------------------
+// Populates the dropdown in the New/Edit Session dialog so the user can
+// pick a managed key without typing a path. "Browse external file..."
+// opens the OS file picker and dumps the result into the keyPath input.
+async function populateSessionKeyPicker(currentKeyPath) {
+  const picker = document.getElementById('s-key-picker');
+  const input = document.getElementById('s-key');
+  if (!picker) return;
+  // Clear everything except the fixed "None" and "External..." options
+  picker.innerHTML =
+    '<option value="">— None —</option>' +
+    '<option value="__external__">Browse external file...</option>';
+  let keys = _keysCache;
+  // Refresh cache if empty — avoids showing an empty dropdown on first open
+  if (!keys || !keys.length) {
+    try { keys = await window.api.keysList(); _keysCache = keys || []; }
+    catch { keys = []; }
+  }
+  if (keys && keys.length) {
+    const sep = document.createElement('option');
+    sep.disabled = true;
+    sep.textContent = '── Managed keys ──';
+    picker.appendChild(sep);
+    for (const k of keys) {
+      const opt = document.createElement('option');
+      opt.value = k.privatePath;
+      opt.textContent = `${k.name}  (${k.type})`;
+      picker.appendChild(opt);
+    }
+  }
+  // Initial selection: match currentKeyPath to one of the managed keys;
+  // otherwise leave the free-form input as-is and select "None" in the
+  // dropdown so the user can still see / edit the path they already had.
+  picker.value = '';
+  if (currentKeyPath) {
+    for (const opt of picker.options) {
+      if (opt.value === currentKeyPath) { picker.value = currentKeyPath; break; }
+    }
+  }
+  input.value = currentKeyPath || '';
+  refreshCustomSelect('s-key-picker');
+
+  picker.onchange = async () => {
+    const v = picker.value;
+    if (v === '__external__') {
+      // Keep the input as-is but open a file picker.
+      // There's no keysPickExternal API — we reuse existing file-picker
+      // ergonomics by just letting the user type/paste the path.
+      // Future: wire up window.api to open a native file picker.
+      alert('For external keys, paste the full path into the input below. Example:\n\nC:\\Users\\you\\.ssh\\id_rsa');
+      picker.value = '';
+      refreshCustomSelect('s-key-picker');
+    } else if (v === '') {
+      input.value = '';
+    } else {
+      input.value = v;
+    }
+  };
+}
+
+// --- Broadcast input (v0.19.27) -----------------------------------------
+// Design: a single global Set<sessionId> of tabs in the broadcast group.
+// When a tab's xterm onData handler fires, if its sessionId is in the group,
+// the keystrokes are forwarded to EVERY member (including itself) via
+// window.api.sshWrite. If the group has 0 or 1 member, broadcast is a no-op.
+//
+// Visual indicators (three, all pink, impossible to miss):
+//   1. Member tabs get .broadcast class (pulsing pink border + 📡 prefix)
+//   2. Status-bar pill "BROADCASTING TO N" (click to clear)
+//   3. Warning banner at the top of the active terminal when the active
+//      tab is itself a broadcast member
+// Clearing the group is one click anywhere (pill, warning-bar Stop,
+// context menu entry).
+
+const broadcastGroup = new Set();
+
+function toggleBroadcastMember(sessionId) {
+  if (!sessionId) return;
+  if (broadcastGroup.has(sessionId)) {
+    broadcastGroup.delete(sessionId);
+  } else {
+    broadcastGroup.add(sessionId);
+  }
+  // If the set drops to 1 member, it's no longer a meaningful group —
+  // keep the single membership so the user can add more later, but the
+  // onData handler will no-op the broadcast path (see the size > 1 check).
+  updateBroadcastUI();
+}
+
+function clearBroadcastGroup() {
+  broadcastGroup.clear();
+  updateBroadcastUI();
+}
+
+function updateBroadcastUI() {
+  // 1. Tab styling — add/remove .broadcast on each tab's element
+  for (const [_id, t] of tabs) {
+    if (!t.tabEl) continue;
+    if (broadcastGroup.has(t.sessionId)) t.tabEl.classList.add('broadcast');
+    else t.tabEl.classList.remove('broadcast');
+  }
+  // 2. Status-bar pill
+  const pill = document.getElementById('broadcast-indicator');
+  const count = document.getElementById('bi-count');
+  if (pill && count) {
+    if (broadcastGroup.size >= 2) {
+      count.textContent = String(broadcastGroup.size);
+      pill.classList.remove('hidden');
+    } else {
+      pill.classList.add('hidden');
+    }
+  }
+  // 3. Warning bar above the active terminal (only if the ACTIVE tab is
+  //    itself a broadcasting member — otherwise the user is just viewing
+  //    a non-broadcasting tab's output and doesn't need the warning there).
+  updateBroadcastWarningBar();
+}
+
+function updateBroadcastWarningBar() {
+  const t = tabs.get(activeTabId);
+  // Remove any existing bar + marker class from every workspace (defensive)
+  for (const [_id, tab] of tabs) {
+    if (!tab.workspace) continue;
+    const existing = tab.workspace.querySelector('.broadcast-warning-bar');
+    if (existing) existing.remove();
+    tab.workspace.classList.remove('has-broadcast-bar');
+  }
+  if (!t) return;
+  if (!broadcastGroup.has(t.sessionId) || broadcastGroup.size < 2) return;
+  const bar = document.createElement('div');
+  bar.className = 'broadcast-warning-bar';
+  const n = broadcastGroup.size;
+  // v0.19.30: banner now has a QUICK-SEND command input + Send button in
+  // addition to the label and Stop button. Type a command there, press
+  // Enter (or click Send), and it goes to every broadcasting member as
+  // "command\n" — same effect as typing it in a terminal, but without
+  // needing to click into one. The input is auto-focused so you can
+  // start typing immediately after broadcast turns on.
+  bar.innerHTML = `
+    <span class="bwb-icon">📡</span>
+    <span class="bwb-label">Broadcast to <strong>${n}</strong>:</span>
+    <input class="bwb-cmd" type="text" placeholder="type a command and press Enter — sends to all ${n} sessions" spellcheck="false" />
+    <button class="bwb-send">Send</button>
+    <button class="bwb-pw" title="Send a password to all broadcasting sessions (for sudo prompts)">🔒 Password</button>
+    <button class="bwb-stop">Stop</button>
+  `;
+  const cmdInput = bar.querySelector('.bwb-cmd');
+  const sendCmd = () => {
+    const text = cmdInput.value;
+    if (!text) return;
+    // Send to every current broadcast member + newline so it executes
+    for (const peerId of broadcastGroup) {
+      try { window.api.sshWrite(peerId, text + '\r'); } catch {}
+    }
+    cmdInput.value = '';
+    cmdInput.focus();
+  };
+  bar.querySelector('.bwb-send').onclick = sendCmd;
+  cmdInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); sendCmd(); }
+    else if (e.key === 'Escape') { e.preventDefault(); cmdInput.blur(); }
+    // Stop the global shortcuts (Ctrl+T etc) from firing while typing a
+    // command in this field — the user expects normal typing here.
+    e.stopPropagation();
+  });
+  bar.querySelector('.bwb-pw').onclick = () => openBroadcastPasswordDialog();
+  bar.querySelector('.bwb-stop').onclick = () => clearBroadcastGroup();
+
+  // Clicks on label / icon / background shouldn't steal focus from the
+  // terminal below (and the user shouldn't be able to text-select the
+  // non-functional parts, which was confusing in v0.19.29).
+  bar.querySelector('.bwb-icon').style.userSelect = 'none';
+  bar.querySelector('.bwb-label').style.userSelect = 'none';
+
+  // v0.19.29: the workspace is position:absolute inset:0 and the terminal
+  // pane sits on top of it (also position:absolute inset:0). The banner is
+  // position:absolute top:0 with z-index:5, and the .has-broadcast-bar
+  // class on the workspace shifts the terminal pane's top:0 down to 36px
+  // so the banner doesn't cover the first row of terminal output.
+  t.workspace.appendChild(bar);
+  t.workspace.classList.add('has-broadcast-bar');
+  // The terminal got a bit smaller — refit so it still fills the space
+  requestAnimationFrame(() => {
+    try { t.fit.fit(); window.api.sshResize(t.sessionId, t.term.cols, t.term.rows); } catch {}
+  });
+}
+
+function bindBroadcastUI() {
+  const pill = document.getElementById('broadcast-indicator');
+  if (pill) pill.onclick = () => clearBroadcastGroup();
+}
+
+// Tab close now cleans itself up inside closeTab() directly — no
+// post-hoc wrapper needed.
+
+// --- Command Palette (v0.19.28) ------------------------------------------
+// VS Code-style quick launcher: Ctrl+Shift+P opens a fuzzy-searchable list
+// of every open-able session plus every app action (settings, keys manager,
+// toggle sidebar, etc.). Enter runs the top match. Arrow keys navigate.
+
+let _paletteItems = [];
+let _paletteFiltered = [];
+let _paletteActiveIdx = 0;
+
+function openPalette() {
+  _paletteItems = collectPaletteItems();
+  const overlay = document.getElementById('palette-overlay');
+  const input = document.getElementById('palette-input');
+  overlay.classList.remove('hidden');
+  input.value = '';
+  renderPaletteList('');
+  // Focus after a tick so the overlay's display transition doesn't swallow it
+  setTimeout(() => input.focus(), 10);
+}
+function closePalette() {
+  document.getElementById('palette-overlay').classList.add('hidden');
+}
+
+// Build the item catalog fresh each open so it reflects the current state.
+// Each item: { label, kind: 'session'|'action', icon, sub?, run: fn }
+function collectPaletteItems() {
+  const items = [];
+
+  // --- Sessions (open/connect to them) ---
+  for (const s of savedSessions) {
+    const kind = s.type || 'ssh';
+    const addr = s.host ? `${s.username || '?'}@${s.host}:${s.port || (kind === 'rdp' ? 3389 : 22)}` : '';
+    items.push({
+      label: `Open: ${s.name}`,
+      sub: addr,
+      kind: 'session',
+      icon: kind === 'rdp' ? 'monitor' : 'server',
+      run: () => openSession(s),
+    });
+  }
+
+  // --- Actions ---
+  const actions = [
+    { label: 'New session…', icon: 'plus', run: () => openSessionDialog(null) },
+    { label: 'Open Settings', icon: 'settings', run: () => document.getElementById('open-settings-btn')?.click() },
+    { label: 'Open SSH Keys manager', icon: 'key', run: () => openKeysDialog() },
+    { label: 'Collapse/expand sidebar', icon: 'sidebar', run: () => setSidebarCollapsed(!settings.sidebarCollapsed) },
+    { label: 'Toggle file panel (Ctrl+B)', icon: 'folder', run: () => setFilePanelVisible(!settings.filePanelVisible) },
+    { label: 'Reset display (restore layout defaults)', icon: 'refresh', run: () => resetLayoutToDefaults() },
+    { label: 'Find in terminal (Ctrl+F)', icon: 'search', run: () => showSearchBar() },
+    { label: 'Check for updates now', icon: 'download', run: async () => {
+        document.getElementById('open-settings-btn')?.click();
+        setTimeout(() => document.getElementById('updates-check-now')?.click(), 100);
+      } },
+    { label: 'Close current tab (Ctrl+W)', icon: 'x', run: () => { if (activeTabId) closeTab(activeTabId); } },
+    { label: 'Duplicate current tab (Ctrl+D)', icon: 'copy', run: () => { if (activeTabId) duplicateTab(activeTabId); } },
+    { label: 'Reconnect current tab', icon: 'rotate-cw', run: () => { if (activeTabId) reconnectTab(activeTabId); } },
+  ];
+  // Broadcast actions — contextual based on current state
+  if (activeTabId) {
+    const t = tabs.get(activeTabId);
+    if (t) {
+      if (broadcastGroup.has(t.sessionId)) {
+        actions.push({ label: 'Remove current tab from broadcast (Ctrl+Shift+B)', icon: 'x', run: () => toggleBroadcastMember(t.sessionId) });
+      } else {
+        actions.push({ label: 'Add current tab to broadcast (Ctrl+Shift+B)', icon: 'radio', run: () => toggleBroadcastMember(t.sessionId) });
+      }
+    }
+  }
+  if (broadcastGroup.size > 0) {
+    actions.push({ label: `Stop broadcasting (${broadcastGroup.size} session${broadcastGroup.size === 1 ? '' : 's'})`, icon: 'x', run: () => clearBroadcastGroup() });
+  }
+  for (const a of actions) items.push({ ...a, kind: 'action' });
+
+  return items;
+}
+
+// Fuzzy match. Returns null if any query char isn't found in order;
+// otherwise a score (higher = better) plus the matched char positions
+// so we can bold them in the UI.
+function fuzzyMatch(query, text) {
+  if (!query) return { score: 0, matches: [] };
+  const q = query.toLowerCase();
+  const t = text.toLowerCase();
+  let ti = 0, qi = 0;
+  let score = 0;
+  let lastMatch = -2;
+  const matches = [];
+  while (qi < q.length && ti < t.length) {
+    if (q[qi] === t[ti]) {
+      matches.push(ti);
+      let bonus = 1;
+      if (ti === lastMatch + 1) bonus += 3; // consecutive chars
+      if (ti === 0 || /[\s\-_\/.:]/.test(t[ti - 1])) bonus += 4; // word start
+      score += bonus;
+      lastMatch = ti;
+      qi++;
+    }
+    ti++;
+  }
+  if (qi < q.length) return null;
+  // Shorter matches rank higher (density bonus)
+  score += 20 / (text.length + 1);
+  return { score, matches };
+}
+
+function renderPaletteList(query) {
+  const list = document.getElementById('palette-list');
+  const q = (query || '').trim();
+  let filtered;
+  if (!q) {
+    // No query: show actions first, then sessions; cap at 40 so scrolling isn't needed
+    filtered = _paletteItems
+      .map((it, i) => ({ it, idx: i, score: it.kind === 'action' ? 1 : 0.5, matches: [] }));
+  } else {
+    filtered = [];
+    for (let i = 0; i < _paletteItems.length; i++) {
+      const it = _paletteItems[i];
+      const m = fuzzyMatch(q, it.label);
+      if (m) filtered.push({ it, idx: i, score: m.score, matches: m.matches });
+    }
+    filtered.sort((a, b) => b.score - a.score);
+  }
+  _paletteFiltered = filtered.slice(0, 50);
+  _paletteActiveIdx = 0;
+
+  if (!_paletteFiltered.length) {
+    list.innerHTML = `<div class="palette-empty">No matches for "${escapeHtml(q)}".</div>`;
+    return;
+  }
+
+  list.innerHTML = '';
+  for (let i = 0; i < _paletteFiltered.length; i++) {
+    const { it, matches } = _paletteFiltered[i];
+    const row = document.createElement('div');
+    row.className = 'palette-item' + (i === 0 ? ' active' : '');
+    row.dataset.idx = i;
+    const labelHtml = highlightMatches(it.label, matches);
+    const sub = it.sub ? `<span class="pi-sub">${escapeHtml(it.sub)}</span>` : '';
+    row.innerHTML = `
+      <span class="pi-icon">${window.icon ? window.icon(it.icon || 'chevron-right', 14) : ''}</span>
+      <span class="pi-label">${labelHtml}</span>
+      ${sub}
+      <span class="pi-kind ${it.kind}">${it.kind}</span>
+    `;
+    row.onclick = () => runPaletteItem(i);
+    row.onmouseenter = () => setPaletteActive(i);
+    list.appendChild(row);
+  }
+}
+
+function highlightMatches(text, matches) {
+  if (!matches || !matches.length) return escapeHtml(text);
+  let out = '';
+  let last = 0;
+  const set = new Set(matches);
+  for (let i = 0; i < text.length; i++) {
+    if (set.has(i)) {
+      if (last < i) out += escapeHtml(text.slice(last, i));
+      out += '<b>' + escapeHtml(text[i]) + '</b>';
+      last = i + 1;
+    }
+  }
+  if (last < text.length) out += escapeHtml(text.slice(last));
+  return out;
+}
+
+function setPaletteActive(idx) {
+  const list = document.getElementById('palette-list');
+  if (!list) return;
+  const rows = list.querySelectorAll('.palette-item');
+  if (!rows.length) return;
+  if (idx < 0) idx = 0;
+  if (idx >= rows.length) idx = rows.length - 1;
+  rows.forEach((r, i) => r.classList.toggle('active', i === idx));
+  _paletteActiveIdx = idx;
+  // Keep the active row in view
+  const activeRow = rows[idx];
+  if (activeRow) activeRow.scrollIntoView({ block: 'nearest' });
+}
+
+function runPaletteItem(idx) {
+  const entry = _paletteFiltered[idx];
+  if (!entry) return;
+  closePalette();
+  try { entry.it.run(); }
+  catch (e) { console.error('[Palette] run failed:', e); }
+}
+
+function bindPalette() {
+  const overlay = document.getElementById('palette-overlay');
+  const input = document.getElementById('palette-input');
+  if (!overlay || !input) return;
+  // Click on the backdrop (not the card) closes
+  overlay.addEventListener('mousedown', (e) => {
+    if (e.target === overlay) closePalette();
+  });
+  input.addEventListener('input', () => renderPaletteList(input.value));
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { e.preventDefault(); closePalette(); return; }
+    if (e.key === 'Enter') { e.preventDefault(); runPaletteItem(_paletteActiveIdx); return; }
+    if (e.key === 'ArrowDown') { e.preventDefault(); setPaletteActive(_paletteActiveIdx + 1); return; }
+    if (e.key === 'ArrowUp') { e.preventDefault(); setPaletteActive(_paletteActiveIdx - 1); return; }
+    if (e.key === 'Home') { e.preventDefault(); setPaletteActive(0); return; }
+    if (e.key === 'End') { e.preventDefault(); setPaletteActive(_paletteFiltered.length - 1); return; }
+  });
+}
+
+// --- Broadcast password prompt (v0.19.31) -------------------------------
+// Sends a password (plus \n) to every broadcasting session at once. Used
+// to answer sudo prompts during fleet commands. The password is NEVER
+// echoed to any terminal, logged, or written to disk — it goes straight
+// from the masked input field to each session's SSH stream, then the
+// field is cleared.
+function openBroadcastPasswordDialog() {
+  if (broadcastGroup.size < 2) return;
+  const dlg = document.getElementById('bwb-pw-dialog');
+  const input = document.getElementById('bwb-pw-input');
+  const count = document.getElementById('bwb-pw-count');
+  if (!dlg || !input) return;
+  input.value = '';
+  if (count) count.textContent = String(broadcastGroup.size);
+  dlg.classList.remove('hidden');
+  setTimeout(() => input.focus(), 20);
+}
+
+function bindBroadcastPasswordDialog() {
+  const dlg = document.getElementById('bwb-pw-dialog');
+  const input = document.getElementById('bwb-pw-input');
+  const ok = document.getElementById('bwb-pw-ok');
+  const cancel = document.getElementById('bwb-pw-cancel');
+  if (!dlg || !input || !ok || !cancel) return;
+  const close = () => {
+    input.value = ''; // defensive — never leave a password in a DOM field
+    dlg.classList.add('hidden');
+  };
+  const send = () => {
+    // Capture + clear BEFORE sending so a slow SSH send can't leave the
+    // password sitting in the DOM for an attacker with devtools open.
+    const pw = input.value;
+    input.value = '';
+    if (!pw) { close(); return; }
+    for (const peerId of broadcastGroup) {
+      try { window.api.sshWrite(peerId, pw + '\r'); } catch {}
+    }
+    close();
+  };
+  ok.onclick = send;
+  cancel.onclick = close;
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); send(); }
+    else if (e.key === 'Escape') { e.preventDefault(); close(); }
+    e.stopPropagation(); // don't trigger global shortcuts while typing a password
+  });
 }

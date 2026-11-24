@@ -27,6 +27,47 @@ const rdpLogFile = () => path.join(userDataPath(), 'rdp-log.jsonl');
 // separate file so admins doing "who connected to what" queries can distinguish.
 const sshLogFile = () => path.join(userDataPath(), 'ssh-log.jsonl');
 
+// v0.19.26: SSH key manager. Keys live in a dedicated folder under
+// userDataPath, isolated from the user's personal ~/.ssh/ so other tools
+// don't accidentally pick them up. Private keys are stored as PKCS8 PEM
+// (ssh2-compatible) and public keys in OpenSSH wire format
+// (`ssh-ed25519 <base64> <comment>`), ready to paste into authorized_keys.
+const keysDir = () => path.join(userDataPath(), 'keys');
+function ensureKeysDir() {
+  try { fs.mkdirSync(keysDir(), { recursive: true }); } catch {}
+}
+// Legal-ish filename: letters, numbers, dot, underscore, hyphen. Reject
+// anything else so a crafted name can't traverse out of keysDir.
+function safeKeyName(name) {
+  const s = String(name || '').trim();
+  if (!s || s.length > 64) return null;
+  if (!/^[A-Za-z0-9._-]+$/.test(s)) return null;
+  if (s.startsWith('.')) return null;
+  return s;
+}
+// Compute the OpenSSH-format SHA256 fingerprint of a parsed ssh2 key.
+// Output looks like `SHA256:AbC123...` matching `ssh-keygen -lf`.
+function sshKeyFingerprint(parsed) {
+  try {
+    const publicSSH = parsed.getPublicSSH();
+    const hash = crypto.createHash('sha256').update(publicSSH).digest('base64');
+    // OpenSSH strips trailing '=' padding in the fingerprint display
+    return 'SHA256:' + hash.replace(/=+$/, '');
+  } catch { return null; }
+}
+// Convert a PKCS8 PEM ed25519 private key to its OpenSSH public-key line.
+// Uses ssh2's parseKey — same parser the connection code uses, so if a key
+// imports successfully here it will also connect successfully.
+function publicLineFromPrivate(pemBuffer, comment) {
+  const { utils: { parseKey } } = require('ssh2');
+  const parsed = parseKey(pemBuffer);
+  if (parsed instanceof Error) throw parsed;
+  const type = parsed.type; // e.g. 'ssh-ed25519', 'ssh-rsa'
+  const publicB64 = parsed.getPublicSSH().toString('base64');
+  const c = String(comment || '').trim().replace(/[\r\n]/g, ' ');
+  return c ? `${type} ${publicB64} ${c}` : `${type} ${publicB64}`;
+}
+
 // Async events (SSH data, close, SFTP progress) can fire after the window
 // has already been destroyed during app shutdown — the network teardown
 // itself takes a moment even after the window is gone. Sending IPC to a
@@ -708,13 +749,57 @@ function askUserAboutHostKey(wc, promptData) {
 // If `savedSessionId` is provided, password is resolved from encrypted store.
 // Otherwise `password` (from renderer) is used directly (ad-hoc connections).
 // If `useAgent` is true, we skip password/key and use the platform's SSH agent.
-ipcMain.handle('ssh:connect', (event, { sessionId, savedSessionId, host, port, username, password, keyPath, useAgent, cols, rows }) => {
+// v0.19.25: Jump host (ProxyJump) support.
+// Build an auth config for one SSH hop given a saved session's record plus
+// optional overrides from the live connect request. Encapsulates the same
+// "useAgent → pageant/openssh-agent → key → password" resolution the main
+// handler used to do inline, so both the target hop AND a jump hop go
+// through the same code path.
+function buildHopConfig(stored, overrides, hopHost, hopPort, hopUser) {
+  const useAgent = overrides.useAgent !== undefined
+    ? !!overrides.useAgent
+    : !!(stored && stored.useAgent);
+  let password = overrides.password;
+  if (!password && !useAgent && stored) {
+    if (stored.passwordEnc) {
+      const dec = decryptPassword(stored.passwordEnc);
+      if (dec != null) password = dec;
+    } else if (sessionStore.version === 1 && typeof stored.password === 'string') {
+      password = stored.password; // legacy fallback until migration runs
+    }
+  }
+  const keyPath = overrides.keyPath !== undefined
+    ? overrides.keyPath
+    : (stored ? stored.keyPath : null);
+  let privateKey;
+  if (keyPath) {
+    try { privateKey = fs.readFileSync(keyPath); }
+    catch (e) { throw new Error(`Key read failed (${hopHost}): ${e.message}`); }
+  }
+  const cfg = { host: hopHost, port: hopPort || 22, username: hopUser, readyTimeout: 15000 };
+  if (useAgent) {
+    const opensshPipe = '\\\\.\\pipe\\openssh-ssh-agent';
+    try {
+      cfg.agent = fs.existsSync(opensshPipe) ? opensshPipe : 'pageant';
+    } catch { cfg.agent = 'pageant'; }
+    cfg.agentForward = false;
+  } else if (privateKey) {
+    cfg.privateKey = privateKey;
+  } else {
+    cfg.password = password;
+  }
+  return cfg;
+}
+
+ipcMain.handle('ssh:connect', (event, { sessionId, savedSessionId, host, port, username, password, keyPath, useAgent, jumpSessionId, cols, rows }) => {
   return new Promise((resolve) => {
     let stored = null;
     if (savedSessionId) {
       stored = sessionStore.sessions.find(s => s.id === savedSessionId);
       // Pull useAgent from stored session if not explicitly passed
       if (stored && useAgent === undefined) useAgent = !!stored.useAgent;
+      // v0.19.25: pull jumpSessionId from stored session if not passed
+      if (stored && !jumpSessionId) jumpSessionId = stored.jumpSessionId || null;
     }
     if (savedSessionId && !password && !useAgent) {
       if (stored) {
@@ -827,6 +912,83 @@ ipcMain.handle('ssh:connect', (event, { sessionId, savedSessionId, host, port, u
     } else {
       cfg.password = password;
     }
+
+    // v0.19.25: If this session is configured to go through a jump host,
+    // connect to the jump first, then tunnel the target connection
+    // through it via forwardOut. Both hops verify host keys individually.
+    if (jumpSessionId) {
+      const jumpStored = sessionStore.sessions.find(s => s.id === jumpSessionId);
+      if (!jumpStored) {
+        resolve({ ok: false, error: `Jump host session not found (id ${jumpSessionId}). Edit this session and pick a valid jump host.` });
+        return;
+      }
+      if ((jumpStored.type || 'ssh') !== 'ssh') {
+        resolve({ ok: false, error: 'Jump host must be an SSH session (not RDP).' });
+        return;
+      }
+      let jumpCfg;
+      try {
+        jumpCfg = buildHopConfig(jumpStored, {}, jumpStored.host, jumpStored.port, jumpStored.username);
+      } catch (e) {
+        resolve({ ok: false, error: `Jump host config failed: ${e.message}` });
+        return;
+      }
+      // Give the jump its own host-key verifier too, scoped to the jump host.
+      jumpCfg.hostVerifier = async (keyBuffer, cb) => {
+        const info = inspectHostKey(keyBuffer);
+        const existing = findKnownHost(jumpStored.host, jumpStored.port || 22);
+        if (existing && existing.keyFingerprint === info.fingerprint) { cb(true); return; }
+        const decision = await askUserAboutHostKey(wc, {
+          host: jumpStored.host, port: jumpStored.port || 22,
+          keyType: info.keyType, fingerprint: info.fingerprint,
+          isMismatch: !!existing,
+          existingFingerprint: existing ? existing.keyFingerprint : null,
+          existingFirstSeen: existing ? existing.firstSeen : null,
+        });
+        if (decision.accept) {
+          if (decision.remember) rememberHost(jumpStored.host, jumpStored.port || 22, info, 'manual');
+          cb(true);
+        } else { cb(false); }
+      };
+
+      const jumpClient = new Client();
+      let jumpEstablished = false;
+      jumpClient.on('ready', () => {
+        jumpEstablished = true;
+        // Tunnel: open a channel on the jump client to (target host, target port)
+        jumpClient.forwardOut('127.0.0.1', 0, host, port || 22, (ferr, stream) => {
+          if (ferr) {
+            try { jumpClient.end(); } catch {}
+            resolve({ ok: false, error: `Jump forward failed: ${ferr.message}` });
+            return;
+          }
+          // Hand the stream to the target client via the `sock` option. The
+          // target client will do its own SSH handshake over that tunneled
+          // socket, including its own host-key verification (cfg.hostVerifier
+          // is still set to the target-scoped verifier above).
+          cfg.sock = stream;
+          try { client.connect(cfg); }
+          catch (err) {
+            try { jumpClient.end(); } catch {}
+            resolve({ ok: false, error: err.message });
+          }
+        });
+      });
+      jumpClient.on('error', (err) => {
+        if (!jumpEstablished) {
+          resolve({ ok: false, error: `Jump host: ${err.message}` });
+        }
+      });
+      // Close the jump client when the target client closes, so we don't
+      // leak the bastion connection after the user disconnects.
+      client.on('close', () => { try { jumpClient.end(); } catch {} });
+
+      try { jumpClient.connect(jumpCfg); }
+      catch (err) { resolve({ ok: false, error: `Jump host connect: ${err.message}` }); }
+      return;
+    }
+
+    // No jump — direct connect
     try { client.connect(cfg); }
     catch (err) { resolve({ ok: false, error: err.message }); }
   });
@@ -1357,3 +1519,240 @@ ipcMain.handle('rdp:saveCredentials', (_e, data) =>
   process.platform === 'win32' ? saveRdpCredentials(data) : RDP_NON_WIN_ERROR);
 ipcMain.handle('rdp:deleteCredentials', (_e, data) =>
   process.platform === 'win32' ? deleteRdpCredentials(data) : RDP_NON_WIN_ERROR);
+
+// --- IPC: SSH Key Manager (v0.19.26) -------------------------------------
+// List all managed keys in keysDir. For each key we return { name, type,
+// fingerprint, publicKey, created }. Private key never leaves the main
+// process in any response — the renderer only needs the public-facing bits.
+ipcMain.handle('keys:list', () => {
+  ensureKeysDir();
+  const { utils: { parseKey } } = require('ssh2');
+  let entries;
+  try { entries = fs.readdirSync(keysDir()); }
+  catch { return []; }
+  const seen = new Set();
+  const keys = [];
+  for (const file of entries) {
+    if (file.endsWith('.pub')) continue;
+    if (!safeKeyName(file)) continue;
+    if (seen.has(file)) continue;
+    seen.add(file);
+    const privPath = path.join(keysDir(), file);
+    const pubPath = privPath + '.pub';
+    let pubText = '';
+    try { pubText = fs.readFileSync(pubPath, 'utf8').trim(); } catch {}
+    let type = 'unknown';
+    let fingerprint = '';
+    try {
+      const privBuf = fs.readFileSync(privPath);
+      const parsed = parseKey(privBuf);
+      if (!(parsed instanceof Error)) {
+        type = parsed.type;
+        fingerprint = sshKeyFingerprint(parsed) || '';
+        if (!pubText) pubText = publicLineFromPrivate(privBuf, file);
+      }
+    } catch {}
+    let created = null;
+    try { created = fs.statSync(privPath).birthtimeMs || fs.statSync(privPath).ctimeMs; } catch {}
+    keys.push({
+      name: file,
+      type,
+      fingerprint,
+      publicKey: pubText,
+      created,
+      privatePath: privPath,
+    });
+  }
+  keys.sort((a, b) => a.name.localeCompare(b.name));
+  return keys;
+});
+
+// Generate a new ed25519 keypair. Writes PKCS8 PEM private + OpenSSH
+// public, both in keysDir. Node's crypto handles the randomness.
+ipcMain.handle('keys:generate', (_e, { name, comment }) => {
+  const clean = safeKeyName(name);
+  if (!clean) return { ok: false, error: 'Invalid key name (use letters, numbers, dot, underscore, hyphen; max 64 chars).' };
+  ensureKeysDir();
+  const privPath = path.join(keysDir(), clean);
+  const pubPath = privPath + '.pub';
+  if (fs.existsSync(privPath) || fs.existsSync(pubPath)) {
+    return { ok: false, error: 'A key with that name already exists.' };
+  }
+  try {
+    const { generateKeyPairSync } = crypto;
+    const { privateKey } = generateKeyPairSync('ed25519', {
+      publicKeyEncoding: { type: 'spki', format: 'pem' },
+      privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+    });
+    fs.writeFileSync(privPath, privateKey, { mode: 0o600 });
+    const pubLine = publicLineFromPrivate(Buffer.from(privateKey), comment || clean);
+    fs.writeFileSync(pubPath, pubLine + '\n');
+    return { ok: true, name: clean, publicKey: pubLine, privatePath: privPath };
+  } catch (e) {
+    try { fs.unlinkSync(privPath); } catch {}
+    try { fs.unlinkSync(pubPath); } catch {}
+    return { ok: false, error: e.message };
+  }
+});
+
+// Import an existing key file (PEM or PuTTY .ppk). Copies it into keysDir
+// under the given name. Parses it to validate and derive the public key.
+ipcMain.handle('keys:import', async (_e, { name }) => {
+  const clean = safeKeyName(name);
+  if (!clean) return { ok: false, error: 'Invalid key name (use letters, numbers, dot, underscore, hyphen).' };
+  ensureKeysDir();
+  const privPath = path.join(keysDir(), clean);
+  const pubPath = privPath + '.pub';
+  if (fs.existsSync(privPath) || fs.existsSync(pubPath)) {
+    return { ok: false, error: 'A key with that name already exists.' };
+  }
+  // Ask the user for the file to import
+  const pick = await dialog.showOpenDialog({
+    title: 'Import SSH private key',
+    properties: ['openFile'],
+    filters: [
+      { name: 'SSH private keys', extensions: ['pem', 'ppk', 'key', 'id_rsa', 'id_ed25519', ''] },
+      { name: 'All files', extensions: ['*'] },
+    ],
+  });
+  if (pick.canceled || !pick.filePaths || !pick.filePaths.length) {
+    return { ok: false, error: 'Canceled.', canceled: true };
+  }
+  const srcPath = pick.filePaths[0];
+  try {
+    const srcBuf = fs.readFileSync(srcPath);
+    const { utils: { parseKey } } = require('ssh2');
+    const parsed = parseKey(srcBuf);
+    if (parsed instanceof Error) {
+      // If it's a passphrase-protected key, ssh2 returns an Error with a
+      // specific message. We can't unlock here (would need a passphrase
+      // prompt dialog) — leave that for a future release.
+      return { ok: false, error: `Could not parse key: ${parsed.message}. Passphrase-protected keys aren't supported yet — decrypt the key first (e.g. ssh-keygen -p -f).` };
+    }
+    // Copy the private key as-is and derive a fresh public-key line.
+    fs.writeFileSync(privPath, srcBuf, { mode: 0o600 });
+    const pubLine = publicLineFromPrivate(srcBuf, clean);
+    fs.writeFileSync(pubPath, pubLine + '\n');
+    return { ok: true, name: clean, publicKey: pubLine, privatePath: privPath };
+  } catch (e) {
+    try { fs.unlinkSync(privPath); } catch {}
+    try { fs.unlinkSync(pubPath); } catch {}
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('keys:delete', (_e, { name }) => {
+  const clean = safeKeyName(name);
+  if (!clean) return { ok: false, error: 'Invalid key name.' };
+  const privPath = path.join(keysDir(), clean);
+  const pubPath = privPath + '.pub';
+  try { if (fs.existsSync(privPath)) fs.unlinkSync(privPath); } catch (e) {
+    return { ok: false, error: `Could not delete private key: ${e.message}` };
+  }
+  try { if (fs.existsSync(pubPath)) fs.unlinkSync(pubPath); } catch {}
+  return { ok: true };
+});
+
+ipcMain.handle('keys:getPublic', (_e, { name }) => {
+  const clean = safeKeyName(name);
+  if (!clean) return { ok: false, error: 'Invalid key name.' };
+  const pubPath = path.join(keysDir(), clean + '.pub');
+  try {
+    const txt = fs.readFileSync(pubPath, 'utf8').trim();
+    return { ok: true, publicKey: txt };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+// Deploy a public key to a target session — the ssh-copy-id equivalent.
+// Appends the key to ~/.ssh/authorized_keys with the right perms, after
+// de-duping against any existing line. Uses the target session's saved
+// credentials (or the password passed in) to open a short-lived SSH
+// connection, runs the deploy commands, then disconnects.
+ipcMain.handle('keys:deploy', async (event, { name, targetSessionId, password }) => {
+  const clean = safeKeyName(name);
+  if (!clean) return { ok: false, error: 'Invalid key name.' };
+  const pubPath = path.join(keysDir(), clean + '.pub');
+  let pubLine;
+  try { pubLine = fs.readFileSync(pubPath, 'utf8').trim(); }
+  catch (e) { return { ok: false, error: `Could not read public key: ${e.message}` }; }
+  if (!pubLine) return { ok: false, error: 'Public key file is empty.' };
+
+  const target = sessionStore.sessions.find(s => s.id === targetSessionId);
+  if (!target) return { ok: false, error: 'Target session not found.' };
+  if ((target.type || 'ssh') !== 'ssh') return { ok: false, error: 'Target must be an SSH session.' };
+
+  // Build the auth for the deploy connection. Prefer the password the
+  // user just typed in the deploy dialog; otherwise fall back to the
+  // session's saved credentials (useAgent, key, or stored password).
+  let overrides = {};
+  if (password) overrides.password = password;
+  let cfg;
+  try { cfg = buildHopConfig(target, overrides, target.host, target.port, target.username); }
+  catch (e) { return { ok: false, error: e.message }; }
+
+  // Host verification — same pattern as the main ssh:connect handler.
+  // Fail closed if host is unknown AND the user isn't there to approve
+  // (deploy is always interactive so we can prompt).
+  const wc = event.sender;
+  cfg.hostVerifier = async (keyBuffer, cb) => {
+    const info = inspectHostKey(keyBuffer);
+    const existing = findKnownHost(target.host, target.port || 22);
+    if (existing && existing.keyFingerprint === info.fingerprint) { cb(true); return; }
+    const decision = await askUserAboutHostKey(wc, {
+      host: target.host, port: target.port || 22,
+      keyType: info.keyType, fingerprint: info.fingerprint,
+      isMismatch: !!existing,
+      existingFingerprint: existing ? existing.keyFingerprint : null,
+      existingFirstSeen: existing ? existing.firstSeen : null,
+    });
+    if (decision.accept) {
+      if (decision.remember) rememberHost(target.host, target.port || 22, info, 'manual');
+      cb(true);
+    } else { cb(false); }
+  };
+
+  return new Promise((resolve) => {
+    const client = new Client();
+    client.on('ready', () => {
+      // Escape the public-key line for safe inclusion in a POSIX double-quoted
+      // string. Only backslash, dollar, backtick, and double-quote need escaping.
+      const safePub = pubLine.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\$/g, '\\$').replace(/`/g, '\\`');
+      // Idempotent: grep -qxF matches the WHOLE line exactly; if it's
+      // already there, we skip the append. Create ~/.ssh with the right
+      // perms if it doesn't exist. umask 077 so new files land 600.
+      const cmd =
+        'umask 077 && ' +
+        'mkdir -p ~/.ssh && chmod 700 ~/.ssh && ' +
+        'touch ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys && ' +
+        `if grep -qxF "${safePub}" ~/.ssh/authorized_keys; then ` +
+          'echo "__SHELLSYNC_ALREADY_PRESENT__"; ' +
+        'else ' +
+          `printf "%s\\n" "${safePub}" >> ~/.ssh/authorized_keys && ` +
+          'echo "__SHELLSYNC_APPENDED__"; ' +
+        'fi';
+      client.exec(cmd, (err, stream) => {
+        if (err) { try { client.end(); } catch {} resolve({ ok: false, error: err.message }); return; }
+        let out = ''; let errOut = '';
+        stream.on('data', (d) => { out += d.toString('utf8'); });
+        stream.stderr.on('data', (d) => { errOut += d.toString('utf8'); });
+        stream.on('close', (code) => {
+          try { client.end(); } catch {}
+          if (code !== 0) {
+            resolve({ ok: false, error: `Remote command failed (exit ${code}): ${errOut.trim() || out.trim()}` });
+            return;
+          }
+          if (out.includes('__SHELLSYNC_ALREADY_PRESENT__')) {
+            resolve({ ok: true, alreadyPresent: true });
+          } else if (out.includes('__SHELLSYNC_APPENDED__')) {
+            resolve({ ok: true, alreadyPresent: false });
+          } else {
+            resolve({ ok: false, error: `Unexpected remote response: ${out.trim()}` });
+          }
+        });
+      });
+    });
+    client.on('error', (err) => resolve({ ok: false, error: err.message }));
+    try { client.connect(cfg); }
+    catch (err) { resolve({ ok: false, error: err.message }); }
+  });
+});

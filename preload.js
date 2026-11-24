@@ -84,6 +84,14 @@ contextBridge.exposeInMainWorld('api', {
   // Electron's app.getVersion() which reads package.json at startup.
   getAppVersion: () => ipcRenderer.invoke('app:get-version'),
 
+  // v0.19.26: SSH key manager
+  keysList: () => ipcRenderer.invoke('keys:list'),
+  keysGenerate: (name, comment) => ipcRenderer.invoke('keys:generate', { name, comment }),
+  keysImport: (name) => ipcRenderer.invoke('keys:import', { name }),
+  keysDelete: (name) => ipcRenderer.invoke('keys:delete', { name }),
+  keysGetPublic: (name) => ipcRenderer.invoke('keys:getPublic', { name }),
+  keysDeploy: (name, targetSessionId, password) => ipcRenderer.invoke('keys:deploy', { name, targetSessionId, password }),
+
   // v0.19.19: auto-updater controls + event subscriptions.
   // Events fire on their own lifecycle: checking → available/not-available
   // → progress (if downloading) → downloaded. Error can fire at any point.

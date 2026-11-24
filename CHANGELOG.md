@@ -7,6 +7,114 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Security-relevant changes are marked with **[SECURITY]**.
 
+## [0.19.31] — 2026-11
+
+### Added — Broadcast "Send password" button
+
+The pain point: when you run `sudo <anything>` in broadcast mode, every server prompts for a password. Typing the password in the command field would send it as cleartext to every session at once — bad if the servers echo it to a log, or if the session is being watched.
+
+- **New amber 🔒 Password button in the broadcast banner.** Opens a masked modal, type the password once, hit Enter — the password (plus Enter) is sent to every broadcasting session at that moment.
+- **Password never touches a terminal visibly** — it goes straight from the masked field to each SSH stream, then the field is cleared from memory.
+- **[SECURITY]** The field is emptied *before* the SSH writes fire so a slow send can't leave the password lingering in the DOM.
+- The button is intentionally styled amber (not pink like the regular Send) so it reads as a sensitive-action button, not an ordinary one.
+
+### Not included in this version
+
+- **Per-server sudo passwords.** Right now the Send-password button assumes the same password works on every broadcasting server (the common case for a fleet). If servers have different sudo passwords, use the button once per sub-group: add only the matching servers to the broadcast, send the password, then regroup. A future release can detect sudo prompts per-session and hand the right password to each — not yet.
+
+## [0.19.30] — 2026-11
+
+### Added
+
+- **Quick-send command input in the broadcast banner.** The banner now has an inline text input: type a command, press Enter (or click Send), and it fires on every broadcasting server at once — no need to click into a terminal first. Useful for one-off fleet commands like `sudo apt update` without taking focus away from whatever you're currently looking at.
+- The input auto-clears after send and stays focused so you can chain several commands in a row.
+
+### Fixed
+
+- **Clicking in the banner (outside the Stop button) used to steal focus from the terminal and let you text-select the warning label**, which looked like you could type there when you actually couldn't. The non-functional parts of the banner (icon, label) are now marked non-selectable; the input field is the only typing surface in the banner.
+
+## [0.19.29] — 2026-11
+
+### Fixed
+
+- **Broadcast warning banner was hidden behind the terminal.** The `.workspace` and `.pane-term` are both `position: absolute; inset: 0`, which meant the banner I inserted as a child of the workspace got overlapped by the terminal pane — only a thin sliver was visible above the tab area. The banner is now explicitly positioned at `top: 0` with `z-index: 5`, and when it's present a `.has-broadcast-bar` class shifts the terminal pane's top down 36px so the banner sits cleanly above the first row of terminal output.
+
+## [0.19.28] — 2026-11
+
+### Added — Command palette
+
+VS Code-style quick launcher. Press `Ctrl+Shift+P` from anywhere in the app.
+
+- **Fuzzy search over everything you can do.** Type a few letters — matching sessions and actions appear ranked by match quality. Word-start matches rank highest (`ngx` matches `nginx-gateway` before `plug-in-gateway`).
+- **Catalog includes:**
+  - Every saved session (opens / connects to it)
+  - Settings, SSH Keys manager, New session, New folder
+  - Toggle sidebar, Toggle file panel, Reset display
+  - Find in terminal, Close/Duplicate/Reconnect current tab
+  - Add/remove current tab from broadcast, Stop broadcasting
+  - Check for updates now
+- **Keyboard navigation**: `↑` `↓` to move, `Enter` to run the highlighted entry, `Esc` to close. Mouse works too.
+- **Matched letters are highlighted in cyan** in each result row so you can see why it matched.
+- **Contextual actions** — the "Add to broadcast" entry only appears when you have an active tab and the tab isn't already in the group. "Stop broadcasting" only appears when a group is active.
+
+## [0.19.27] — 2026-11
+
+### Added — Broadcast input
+
+Type once, send to many — the big productivity multiplier when managing a fleet.
+
+- **Add any set of open tabs to a single broadcast group.** When two or more tabs are grouped, keystrokes typed in any member are mirrored to every member's SSH stream. Run `apt update` once, hit ten servers.
+- **How to tag a tab:** right-click the tab → *Add to broadcast* (or *Remove from broadcast*), **or** press `Ctrl+Shift+B` while the tab is active.
+- **How to stop:** click the pink pill in the status bar, click Stop in the warning bar, or use the right-click *Stop broadcasting (all)* entry.
+- **Three overlapping visual warnings** so you never accidentally `rm -rf` three servers:
+  1. Member tabs show a **pulsing pink border** + 📡 prefix in the tab bar
+  2. **Status bar pill** — bright pink `📡 BROADCASTING TO N × STOP` — clickable to clear the group
+  3. **Warning banner** above the active terminal when the active tab is itself a broadcast member: "Typing here goes to N sessions — [Stop]"
+- Closing a tab automatically removes it from the group.
+
+### Not included in this version
+
+- **Multiple named broadcast groups** (Group A, Group B). One group is enough for the common fleet-admin workflow; multi-group support is a straightforward extension if the need comes up.
+- **Dangerous-command warnings** (prompt before broadcasting `rm`, `shutdown`, `reboot`). The three persistent visual indicators are the v1 safety mechanism — a per-command confirm would be noisy enough that users would learn to dismiss it reflexively.
+
+## [0.19.26] — 2026-11
+
+### Added — SSH Key Manager
+
+A first-class SSH key manager, accessible from Settings → SSH Keys → Open SSH Keys manager.
+
+- **Generate ed25519 keypair** with one click. Private key written as PKCS8 PEM (chmod 0600), public key written in OpenSSH `ssh-ed25519 <base64> <comment>` format next to it.
+- **Import existing key** from a file picker (PEM, `.ppk`, OpenSSH). Parses via `ssh2.utils.parseKey` so if it imports, it connects. Passphrase-protected keys not supported yet — decrypt them first with `ssh-keygen -p -f`.
+- **Copy public key** to the clipboard (one click, ready to paste into `authorized_keys`).
+- **Delete key** with confirmation.
+- **Deploy to server** (the `ssh-copy-id` equivalent): pick a saved SSH session, enter its password (or use its stored credentials), and ShellSync connects, appends the public key to `~/.ssh/authorized_keys` on the target, and disconnects. Idempotent — safe to re-run; already-present keys aren't duplicated. Creates `~/.ssh` with `0700` and `authorized_keys` with `0600` if they don't exist.
+- Keys live in `%APPDATA%\ShellSync\keys\` on Windows, isolated from your personal `~/.ssh/`. The private key never leaves the main process in any IPC response — only metadata (name, type, fingerprint) and the public key reach the renderer.
+
+### Added — Per-session key picker
+
+- The "Private key" field in the New/Edit Session dialog is now a **dropdown picker** listing your managed keys plus an **External file** option for keys on disk outside ShellSync. Picking a managed key fills in its absolute path — no change to how sessions store the key (still `keyPath`), so existing SSH connections keep working unchanged.
+
+### Security
+
+- **[SECURITY]** Key deployment runs under the same TOFU host-key verification as normal connections. If the target's host key is unknown or has changed, the user is prompted exactly as for a regular SSH connect — a MITM can't trick the deployer into sending a password or deployed pubkey to the wrong host.
+- Deploy escapes the public-key line for safe inclusion in the remote shell command (`\\`, `"`, `$`, `` ` ``). An attacker-controlled public-key comment can't break out of the quoted string.
+
+## [0.19.25] — 2026-11
+
+### Added
+
+- **Jump host / ProxyJump support.** You can now connect to servers that live behind a bastion / jump host — the equivalent of `ssh -J bastion target`. In the New/Edit Session dialog there's a new **Connect through (jump host)** dropdown that lists your other saved SSH sessions. Pick one, and ShellSync will first connect to the jump host, then tunnel the target connection through it via `forwardOut`. Each hop verifies its own host key independently (TOFU on both). The jump host's own credentials (password, key, or agent) come from the saved jump session, so you don't re-enter them.
+- Jump-session selection filters out RDP sessions (no SSH tunnel to forward through) and prevents circular references (A jumps through B jumps through A).
+
+### Internal
+
+- New `buildHopConfig()` helper in `main.js` centralizes the "useAgent → agent-pipe → key → password" auth resolution so both the target hop and the jump hop use the same code path.
+- The target client's host-key verifier runs over the tunneled socket — the jump host can't impersonate the target because the target's own host key is still checked at handshake time.
+
+### Not included in this version
+
+- **Multi-hop chains (bastion → relay → target).** Single-hop only for now. If the jump host itself has a jump host configured, that second-level jump is ignored. Enough for the common bastion case; multi-hop can be added later if the need comes up.
+
 ## [0.19.24] — 2026-11
 
 ### Changed

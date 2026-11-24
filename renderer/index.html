@@ -187,6 +187,14 @@
           <span class="status-dot" id="status-dot"></span>
           <span id="status-text">No session</span>
         </div>
+        <!-- v0.19.27: Broadcast indicator. Hidden unless broadcast is active.
+             Bright pink, prominent, click-to-clear — meant to be impossible
+             to miss, so you never accidentally keep broadcasting. -->
+        <div id="broadcast-indicator" class="hidden" title="Click to stop broadcasting">
+          <span class="bi-icon">📡</span>
+          <span class="bi-label">BROADCASTING TO <span id="bi-count">0</span></span>
+          <span class="bi-stop">× STOP</span>
+        </div>
         <div id="transfer-status"></div>
       </div>
     </main>
@@ -316,13 +324,35 @@
             <button type="button" id="s-pass-clear" class="hidden" title="Remove saved password">Clear saved</button>
           </div>
         </label>
-        <label>Private key path (optional) <input id="s-key" placeholder="C:\Users\me\.ssh\id_rsa" /></label>
+        <!-- v0.19.26: Private key picker.
+             - Dropdown lists managed keys (from ShellSync's SSH Key manager)
+             - "External file..." lets the user pick any key file on disk
+             - "None" means password auth (or agent, if the checkbox below is set)
+             The final value stored in session.keyPath is always a full path. -->
+        <label>Private key
+          <div class="key-picker">
+            <select id="s-key-picker">
+              <option value="">— None —</option>
+              <option value="__external__">Browse external file...</option>
+            </select>
+            <input id="s-key" placeholder="C:\Users\me\.ssh\id_rsa" style="margin-top: 6px;" />
+          </div>
+        </label>
         <div class="agent-box">
           <label class="checkbox-row">
             <input type="checkbox" id="s-use-agent" />
             <span><strong>Use SSH agent</strong> (Pageant or Windows OpenSSH) — ignores password &amp; key file above</span>
           </label>
         </div>
+        <!-- v0.19.25: Jump host (ProxyJump / ssh -J). Picks from the user's
+             existing SSH sessions. When set, ShellSync first connects to the
+             jump host and tunnels the target connection through it. -->
+        <label>Connect through (jump host)
+          <select id="s-jump">
+            <option value="">— None (direct connection) —</option>
+          </select>
+        </label>
+        <p class="field-help">Tunnel through a bastion / jump host. Equivalent to <code>ssh -J</code>. The jump host must be another saved SSH session.</p>
       </div>
 
       <div id="s-rdp-fields" class="hidden">
@@ -534,6 +564,17 @@
         <div class="kh-empty">No trusted hosts yet.</div>
       </div>
 
+      <!-- v0.19.26: SSH Keys section opens the dedicated key manager dialog. -->
+      <h4>SSH Keys</h4>
+      <p class="dialog-desc" style="margin: 4px 0 8px;">
+        Manage private keys ShellSync uses to authenticate — generate new
+        ed25519 keys, import existing keys, copy public keys, and deploy
+        them to servers (<code>ssh-copy-id</code> equivalent).
+      </p>
+      <div style="display:flex; gap:8px; align-items:center; margin-bottom:14px;">
+        <button id="open-keys-mgr-btn"><span data-icon="key"></span> Open SSH Keys manager</button>
+      </div>
+
       <!-- v0.19.24: Layout — one-click restore of sidebar/file-panel to
            their startup defaults in case the user hid or shrank them and
            wants to get back to a known-good state. -->
@@ -562,6 +603,7 @@
 
       <h4>Keyboard Shortcuts</h4>
       <ul class="shortcuts">
+        <li><kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>P</kbd> — Command palette</li>
         <li><kbd>Ctrl</kbd> + <kbd>T</kbd> — New session</li>
         <li><kbd>Ctrl</kbd> + <kbd>W</kbd> — Close current tab</li>
         <li><kbd>Ctrl</kbd> + <kbd>Tab</kbd> — Next tab</li>
@@ -570,6 +612,7 @@
         <li><kbd>Ctrl</kbd> + <kbd>F</kbd> — Find in terminal</li>
         <li><kbd>Ctrl</kbd> + <kbd>B</kbd> — Toggle file panel</li>
         <li><kbd>Ctrl</kbd> + <kbd>\</kbd> — Collapse / expand sidebar</li>
+        <li><kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>B</kbd> — Add/remove current tab from broadcast group</li>
         <li><kbd>Ctrl</kbd> + <kbd>+</kbd> / <kbd>−</kbd> — Global font size</li>
         <li><kbd>Ctrl</kbd> + scroll — Zoom active terminal only</li>
       </ul>
@@ -663,6 +706,109 @@
         <button id="mig-later"><span data-icon="x"></span> Remind Me Later</button>
         <button id="mig-upgrade" class="btn-primary"><span data-icon="key"></span> Encrypt Now</button>
       </div>
+    </div>
+  </div>
+
+  <!-- =========== v0.19.26: SSH KEY MANAGER =========== -->
+  <div id="keys-dialog" class="dialog hidden">
+    <div class="dialog-inner card" style="max-width: 720px; width: 95vw;">
+      <h3>SSH Keys</h3>
+      <p class="dialog-desc" style="margin: 4px 0 14px;">
+        Keys are stored privately in ShellSync's data folder (isolated from your <code>~/.ssh/</code>). Private keys never leave this machine.
+      </p>
+
+      <div class="keys-toolbar">
+        <button id="keys-generate-btn" class="btn-primary"><span data-icon="plus"></span> Generate ed25519</button>
+        <button id="keys-import-btn"><span data-icon="download"></span> Import existing key...</button>
+        <button id="keys-refresh-btn" title="Refresh list"><span data-icon="refresh"></span></button>
+      </div>
+
+      <div id="keys-list" class="keys-list">
+        <div class="keys-empty">No keys yet. Generate one or import an existing key to get started.</div>
+      </div>
+
+      <div class="dialog-actions">
+        <button id="keys-close-btn"><span data-icon="x"></span> Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Prompt for a new-key name -->
+  <div id="keys-new-dialog" class="dialog hidden">
+    <div class="dialog-inner card" style="max-width: 420px;">
+      <h3 id="keys-new-title">Generate ed25519 key</h3>
+      <label>Key name
+        <input id="keys-new-name" placeholder="my-ed25519" />
+      </label>
+      <p class="field-help">Letters, numbers, dot, underscore, hyphen. Max 64 chars.</p>
+      <label id="keys-new-comment-row">Comment (optional)
+        <input id="keys-new-comment" placeholder="edwin@laptop" />
+      </label>
+      <p class="field-help">Appears at the end of the public-key line. Helps you identify where the key came from when you see it in authorized_keys.</p>
+      <div id="keys-new-error" class="dialog-error hidden"></div>
+      <div class="dialog-actions">
+        <button id="keys-new-cancel-btn"><span data-icon="x"></span> Cancel</button>
+        <button id="keys-new-ok-btn" class="btn-primary"><span data-icon="check"></span> Create</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Deploy dialog: pick a target session + enter its password -->
+  <div id="keys-deploy-dialog" class="dialog hidden">
+    <div class="dialog-inner card" style="max-width: 460px;">
+      <h3>Deploy public key</h3>
+      <p class="dialog-desc" style="margin: 4px 0 14px;">
+        Appends the selected key to <code>~/.ssh/authorized_keys</code> on the target server. Idempotent — if the key is already there, nothing changes.
+      </p>
+      <label>Key
+        <input id="keys-deploy-key" readonly />
+      </label>
+      <label>Target session
+        <select id="keys-deploy-target"></select>
+      </label>
+      <label>Password for target (leave blank to use saved credentials)
+        <input id="keys-deploy-pass" type="password" placeholder="••••••••" />
+      </label>
+      <p class="field-help">The password is used once to connect and append the key, then discarded. After deployment, the target will accept the key for passwordless login.</p>
+      <div id="keys-deploy-status" class="dialog-status hidden"></div>
+      <div class="dialog-actions">
+        <button id="keys-deploy-cancel-btn"><span data-icon="x"></span> Cancel</button>
+        <button id="keys-deploy-ok-btn" class="btn-primary"><span data-icon="upload"></span> Deploy</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- =========== v0.19.31: BROADCAST PASSWORD PROMPT ===========
+       Masked single-field modal used by the broadcast banner's "Send
+       password" button. Sends the typed password + \n to every current
+       broadcast member, then clears the field. Password is never logged,
+       never echoed, never written to disk. -->
+  <div id="bwb-pw-dialog" class="dialog hidden">
+    <div class="dialog-inner card" style="max-width: 420px;">
+      <h3>Send password to broadcasting sessions</h3>
+      <p class="dialog-desc" style="margin: 4px 0 14px;">
+        Sends this password (plus Enter) to every broadcasting session at once. Use this to answer <code>sudo</code> prompts without typing the password into any terminal where it might echo or get logged.
+      </p>
+      <label>Password
+        <input id="bwb-pw-input" type="password" autocomplete="off" />
+      </label>
+      <p class="field-help">Cleared from memory immediately after send. Works best when all target servers share the same sudo password.</p>
+      <div class="dialog-actions">
+        <button id="bwb-pw-cancel"><span data-icon="x"></span> Cancel</button>
+        <button id="bwb-pw-ok" class="btn-primary"><span data-icon="check"></span> Send to <span id="bwb-pw-count">?</span></button>
+      </div>
+    </div>
+  </div>
+
+  <!-- =========== v0.19.28: COMMAND PALETTE =========== -->
+  <div id="palette-overlay" class="hidden">
+    <div id="palette-card">
+      <div id="palette-input-row">
+        <span class="palette-prompt">&gt;</span>
+        <input id="palette-input" placeholder="Type to search sessions and actions…" autocomplete="off" />
+        <span class="palette-hint"><kbd>↑</kbd><kbd>↓</kbd> navigate · <kbd>Enter</kbd> run · <kbd>Esc</kbd> close</span>
+      </div>
+      <div id="palette-list"></div>
     </div>
   </div>
 
